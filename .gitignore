@@ -26,7 +26,18 @@ yarn-debug.log*
 yarn-error.log*
 
 # local env files
+.env
 .env*.local
+
+# credentials & secrets — never commit
+CREDENTIALS.md
+tmp/
+
+# Let's Encrypt — SSL private keys must never be committed
+certbot/conf/
+certbot/www/
+# But keep the parent dir tracked (has .gitkeep)
+!certbot/.gitkeep
 
 # vercel
 .vercel

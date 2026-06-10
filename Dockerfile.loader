@@ -1,0 +1,21 @@
+# ── TradeKaro — Security-Master Loader (one-shot, minimal) ───────────────────
+# Installs only the 3 packages the loader actually uses.
+# No package.json copy needed — npm creates one automatically.
+FROM node:18-alpine
+
+RUN apk add --no-cache libc6-compat
+
+WORKDIR /app
+
+# Install only what the loader needs (~5MB vs 537MB for full install)
+RUN npm install --no-audit --no-fund --save csv-parse ioredis pg
+
+COPY scripts/bulk-load.mjs      ./scripts/
+COPY scripts/load-entrypoint.sh ./scripts/
+RUN chmod +x /app/scripts/load-entrypoint.sh
+
+RUN addgroup --system --gid 1001 loader && \
+    adduser  --system --uid 1001 loader
+USER loader
+
+ENTRYPOINT ["/app/scripts/load-entrypoint.sh"]

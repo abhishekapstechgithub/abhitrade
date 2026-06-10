@@ -1,0 +1,204 @@
+version: '3.9'
+
+# ────────────────────────────────────────────────────────────────────────────
+#  TradeKaro — Production Docker Compose
+#
+#  First deploy (with SSL):
+#    docker-compose up -d --build          ← starts everything
+#    bash scripts/ssl-init.sh              ← gets Let's Encrypt cert (run once)
+#
+#  Subsequent starts:
+#    docker-compose up -d --build
+#
+#  Reload CSV:   docker-compose run --rm loader --force
+#  Stop all:     docker-compose down
+#  Wipe volumes: docker-compose down -v
+#
+#  Traffic flow:
+#    Internet → Nginx (80/443) → app:3000 (internal only)
+# ────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: abhitrade-postgres
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-tradekaro}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tradekaro}
+      POSTGRES_DB:       postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./lib/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+      - ./scripts/init-databases.sh:/docker-entrypoint-initdb.d/00_init.sh:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-tradekaro} -d abhitrade_live']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - abhitrade-net
+
+  # ── Redis ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: abhitrade-redis
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+        --appendonly yes
+        --save 60 1
+        --maxmemory 512mb
+        --maxmemory-policy allkeys-lru
+        --loglevel notice
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - abhitrade-net
+
+  # ── Security-master CSV loader (one-shot) ─────────────────────────────────
+  loader:
+    build:
+      context: .
+      dockerfile: Dockerfile.loader
+    container_name: abhitrade-loader
+    volumes:
+      - .:/csv:ro
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB_LIVE=abhitrade_live
+      - POSTGRES_DB_PAPER=abhitrade_papertrade
+      - POSTGRES_USER=${POSTGRES_USER:-tradekaro}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-tradekaro}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+    networks:
+      - abhitrade-net
+
+  # ── Next.js App — internal only, fronted by Nginx ─────────────────────────
+  # Port 3000 is NOT exposed to the host. All traffic comes through nginx.
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: abhitrade-app
+    expose:
+      - '3000'
+    volumes:
+      - uploads:/app/tmp/uploads
+    environment:
+      - NODE_ENV=production
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB_LIVE=abhitrade_live
+      - POSTGRES_DB_PAPER=abhitrade_papertrade
+      - POSTGRES_USER=${POSTGRES_USER:-tradekaro}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-tradekaro}
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-https://abhitrade.online/api}
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - UPLOAD_DIR=/app/tmp/uploads
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 5s
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3000/api/health || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - abhitrade-net
+
+  # ── Nginx — reverse proxy + SSL termination ────────────────────────────────
+  # Starts in HTTP-only mode if no SSL cert exists yet.
+  # After running ssl-init.sh, restart nginx to activate HTTPS:
+  #   docker-compose restart nginx
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: abhitrade-nginx
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d/http.conf:/etc/nginx/conf.d/http.conf:ro
+      # https.conf is mounted as a template; copied into conf.d only when cert exists
+      - ./nginx/conf.d/https.conf:/etc/nginx/https.conf.template:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+      - ./certbot/www:/var/www/certbot:ro
+    # Smart startup: enable HTTPS config only when the cert is present
+    command: >
+      /bin/sh -c "
+        if [ -f /etc/letsencrypt/live/abhitrade.online/fullchain.pem ]; then
+          echo 'SSL cert found — starting with HTTPS';
+          cp /etc/nginx/https.conf.template /etc/nginx/conf.d/https.conf;
+        else
+          echo 'No SSL cert yet — starting HTTP-only. Run ssl-init.sh then restart nginx.';
+        fi;
+        nginx -g 'daemon off;'
+      "
+    depends_on:
+      - app
+    restart: unless-stopped
+    stop_grace_period: 5s
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost/api/health || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - abhitrade-net
+
+  # ── Certbot — auto-renews Let's Encrypt cert every 12 hours ───────────────
+  # First-time cert: run  bash scripts/ssl-init.sh
+  certbot:
+    image: certbot/certbot:latest
+    container_name: abhitrade-certbot
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    # Renew loop: wakes every 12h, only actually renews when <30 days remain
+    entrypoint: /bin/sh -c 'trap exit TERM; while :; do certbot renew --quiet; sleep 12h & wait $${!}; done'
+    restart: unless-stopped
+    networks:
+      - abhitrade-net
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  uploads:
+    driver: local
+
+networks:
+  abhitrade-net:
+    driver: bridge
+    name: abhitrade-net

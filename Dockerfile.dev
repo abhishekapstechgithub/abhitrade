@@ -1,0 +1,18 @@
+# ── TradeKaro — Dev image (web only) ─────────────────────────────────────────
+# Source is bind-mounted at runtime via docker-compose.override.yml.
+# This image only exists to cache node_modules — rebuild only when package.json changes.
+FROM node:18-alpine
+
+RUN apk add --no-cache libc6-compat
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --prefer-offline --no-audit --no-fund
+
+EXPOSE 3000
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+ENV NEXT_TELEMETRY_DISABLED=1
+
+CMD ["npm", "run", "dev"]

@@ -1,0 +1,25 @@
+export const Colors = {
+  BG_DARK: '#050b18',
+  BG_SURFACE: '#0d1b2e',
+  BG_CARD: '#0f2236',
+  BORDER: '#1a3a5c',
+  TEXT_PRIMARY: '#e8f0ff',
+  TEXT_SECONDARY: '#8baac8',
+  GREEN: '#16a34a',
+  GREEN_DIM: '#14532d',
+  RED: '#dc2626',
+  RED_DIM: '#7f1d1d',
+  BLUE: '#2563eb',
+  BLUE_DIM: '#1e3a8a',
+  AMBER: '#f59e0b',
+  AMBER_DIM: '#78350f',
+  WHITE: '#ffffff',
+  GRAY_100: '#f3f4f6',
+  GRAY_400: '#9ca3af',
+  GRAY_600: '#4b5563',
+  GRAY_700: '#374151',
+  GRAY_800: '#1f2937',
+  TRANSPARENT: 'transparent',
+} as const;
+
+export type ColorKey = keyof typeof Colors;
