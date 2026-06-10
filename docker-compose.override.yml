@@ -20,20 +20,11 @@ services:
     ports:
       - '3000:3000'
     volumes:
-      # Web source — only what Next.js needs
-      - ./app:/app/app
-      - ./components:/app/components
-      - ./lib:/app/lib
-      - ./store:/app/store
-      - ./types:/app/types
-      - ./hooks:/app/hooks
-      - ./public:/app/public
-      - ./middleware.ts:/app/middleware.ts
-      - ./next.config.mjs:/app/next.config.mjs
-      - ./tailwind.config.ts:/app/tailwind.config.ts
-      - ./tsconfig.json:/app/tsconfig.json
-      - ./postcss.config.mjs:/app/postcss.config.mjs
-      # Prevent host node_modules from overwriting the container's
+      # Mount entire project root — single mount is reliable on Docker Desktop + WSL2.
+      # Individual per-directory mounts silently fail on Windows filesystem paths.
+      - .:/app
+      # Keep the container's node_modules (npm ci'd in the image) — don't overwrite
+      # with the host's node_modules (or lack thereof)
       - /app/node_modules
       # Preserve Next.js compilation cache between restarts (huge speed boost)
       - nextjs_cache:/app/.next
