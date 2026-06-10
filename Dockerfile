@@ -42,7 +42,8 @@ RUN addgroup --system --gid 1001 nodejs && \
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 # Static assets (JS/CSS chunks) served directly by Next.js
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static    ./.next/static
-# Public directory (favicon, logos, etc.)
+# Public directory — ensure it exists even when empty (git doesn't track empty dirs)
+RUN mkdir -p public
 COPY --from=builder --chown=nextjs:nodejs /app/public          ./public
 
 # Upload temp dir writable by the app user
