@@ -435,6 +435,14 @@ export async function getUserByEmail(email: string) {
   return res.rows[0] ?? null;
 }
 
+export async function getUserByName(name: string) {
+  const res = await getPool('live').query(
+    'SELECT * FROM users WHERE LOWER(name) = LOWER($1) LIMIT 1',
+    [name.trim()],
+  );
+  return res.rows[0] ?? null;
+}
+
 export async function getUserById(id: string) {
   const res = await getPool('live').query(
     'SELECT id,email,phone,name,kyc_status,avatar_url,created_at FROM users WHERE id=$1', [id],

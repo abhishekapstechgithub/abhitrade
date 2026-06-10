@@ -1,19 +1,49 @@
 export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyOtp } from '@/lib/otp';
-import { getUserByEmail } from '@/lib/db/repositories';
+import { getUserByEmail, getUserByName } from '@/lib/db/repositories';
 import { createSession, SESSION_COOKIE, SESSION_TTL_SECONDS } from '@/lib/session';
 import { isDbAvailable } from '@/lib/db/client';
 
 export async function POST(req: NextRequest) {
   try {
-    const { email, otp } = await req.json();
-    if (!email?.trim() || !otp?.trim()) {
-      return NextResponse.json({ error: 'email and otp are required' }, { status: 400 });
+    const { email, name, otp } = await req.json();
+
+    const hasName  = !!name?.trim();
+    const hasEmail = !!email?.trim();
+
+    if ((!hasName && !hasEmail) || !otp?.trim()) {
+      return NextResponse.json({ error: 'name (or email) and otp are required' }, { status: 400 });
     }
 
-    const emailLower = email.trim().toLowerCase();
-    const result = await verifyOtp(emailLower, otp.trim());
+    if (!(await isDbAvailable())) {
+      return NextResponse.json({ error: 'Database unavailable' }, { status: 503 });
+    }
+
+    let user: any = null;
+    let resolvedEmail = '';
+
+    if (hasName) {
+      user = await getUserByName(name.trim());
+      if (!user) {
+        return NextResponse.json(
+          { error: 'No account found with this name. Please sign up first.' },
+          { status: 404 },
+        );
+      }
+      resolvedEmail = user.email;
+    } else {
+      resolvedEmail = email.trim().toLowerCase();
+      user = await getUserByEmail(resolvedEmail);
+      if (!user) {
+        return NextResponse.json(
+          { error: 'No account found for this email. Please sign up first.' },
+          { status: 404 },
+        );
+      }
+    }
+
+    const result = await verifyOtp(resolvedEmail, otp.trim());
 
     if (result === 'expired') {
       return NextResponse.json({ error: 'OTP expired. Please request a new one.' }, { status: 400 });
@@ -23,19 +53,6 @@ export async function POST(req: NextRequest) {
     }
     if (result === 'invalid') {
       return NextResponse.json({ error: 'Incorrect OTP. Please try again.' }, { status: 400 });
-    }
-
-    // OTP verified — fetch or create user
-    if (!(await isDbAvailable())) {
-      return NextResponse.json({ error: 'Database unavailable' }, { status: 503 });
-    }
-
-    const user = await getUserByEmail(emailLower);
-    if (!user) {
-      return NextResponse.json(
-        { error: 'No account found for this email. Please sign up first.' },
-        { status: 404 },
-      );
     }
 
     const sessionId = await createSession({

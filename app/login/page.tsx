@@ -85,7 +85,6 @@ function Countdown({ seconds, onComplete }: { seconds: number; onComplete: () =>
 function BrandPanel() {
   return (
     <div className="hidden lg:flex flex-col justify-between bg-gradient-to-br from-blue-700 via-blue-600 to-indigo-700 text-white p-10 relative overflow-hidden">
-      {/* Background decoration */}
       <div className="absolute inset-0 opacity-10">
         <div className="absolute top-10 left-10 w-64 h-64 rounded-full bg-white/20 blur-3xl" />
         <div className="absolute bottom-20 right-0 w-80 h-80 rounded-full bg-indigo-300/20 blur-3xl" />
@@ -96,7 +95,6 @@ function BrandPanel() {
         </svg>
       </div>
 
-      {/* Logo */}
       <div className="relative z-10">
         <div className="flex items-center gap-3 mb-2">
           <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-sm">
@@ -109,7 +107,6 @@ function BrandPanel() {
         <p className="text-blue-200 text-sm">India&apos;s smartest trading platform</p>
       </div>
 
-      {/* Central content */}
       <div className="relative z-10 space-y-8">
         <div>
           <h2 className="text-3xl font-bold leading-tight mb-3">
@@ -121,7 +118,6 @@ function BrandPanel() {
           </p>
         </div>
 
-        {/* Feature list */}
         <div className="space-y-3">
           {[
             { icon: '⚡', text: 'Real-time option chain with live OI & IV' },
@@ -136,7 +132,6 @@ function BrandPanel() {
           ))}
         </div>
 
-        {/* Mock stats */}
         <div className="grid grid-cols-3 gap-4 pt-4 border-t border-white/20">
           {[
             { val: '2M+', label: 'Traders' },
@@ -167,25 +162,24 @@ function LoginContent() {
 
   const [tab, setTab] = useState<Tab>('signin');
 
-  // Sign-in state
-  const [siEmail, setSiEmail]       = useState('');
-  const [siStep, setSiStep]         = useState<SignInStep>('email');
-  const [siOtp, setSiOtp]           = useState('');
-  const [siLoading, setSiLoading]   = useState(false);
-  const [siError, setSiError]       = useState('');
-  const [siDevOtp, setSiDevOtp]     = useState('');
+  // Sign-in state (name-based)
+  const [siName, setSiName]           = useState('');
+  const [siStep, setSiStep]           = useState<SignInStep>('email');
+  const [siOtp, setSiOtp]             = useState('');
+  const [siLoading, setSiLoading]     = useState(false);
+  const [siError, setSiError]         = useState('');
   const [siCanResend, setSiCanResend] = useState(false);
   const [siResendKey, setSiResendKey] = useState(0);
 
   // Sign-up state
-  const [suName, setSuName]         = useState('');
-  const [suEmail, setSuEmail]       = useState('');
-  const [suPhone, setSuPhone]       = useState('');
-  const [suStep, setSuStep]         = useState<SignInStep>('email');
-  const [suOtp, setSuOtp]           = useState('');
-  const [suLoading, setSuLoading]   = useState(false);
-  const [suError, setSuError]       = useState('');
-  const [suDevOtp, setSuDevOtp]     = useState('');
+  const [suName, setSuName]           = useState('');
+  const [suEmail, setSuEmail]         = useState('');
+  const [suPhone, setSuPhone]         = useState('');
+  const [suStep, setSuStep]           = useState<SignInStep>('email');
+  const [suOtp, setSuOtp]             = useState('');
+  const [suLoading, setSuLoading]     = useState(false);
+  const [suError, setSuError]         = useState('');
+  const [suDevOtp, setSuDevOtp]       = useState('');
   const [suCanResend, setSuCanResend] = useState(false);
   const [suResendKey, setSuResendKey] = useState(0);
 
@@ -199,22 +193,17 @@ function LoginContent() {
       const res = await fetch('/api/auth/send-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: siEmail }),
+        body: JSON.stringify({ name: siName }),
       });
       const data = await res.json();
       if (!res.ok) {
-        if (res.status === 404 || !data.userExists) {
-          setSiError('No account found. Please sign up first.');
-        } else {
-          setSiError(data.error || 'Failed to send OTP');
-        }
+        setSiError(data.error || 'Failed to send OTP');
         return;
       }
       if (!data.userExists) {
-        setSiError('No account found for this email. Please sign up first.');
+        setSiError('No account found with this name. Please sign up first.');
         return;
       }
-      setSiDevOtp(data.devOtp || '');
       setSiCanResend(false);
       setSiResendKey((k) => k + 1);
       setSiStep('otp');
@@ -234,7 +223,7 @@ function LoginContent() {
       const res = await fetch('/api/auth/verify-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: siEmail, otp: siOtp }),
+        body: JSON.stringify({ name: siName, otp: siOtp }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -253,16 +242,14 @@ function LoginContent() {
   const handleResendSignIn = useCallback(async () => {
     setSiCanResend(false);
     setSiError('');
-    const res = await fetch('/api/auth/send-otp', {
+    await fetch('/api/auth/send-otp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: siEmail }),
+      body: JSON.stringify({ name: siName }),
     });
-    const data = await res.json();
-    if (data.devOtp) setSiDevOtp(data.devOtp);
     setSiResendKey((k) => k + 1);
     setSiOtp('');
-  }, [siEmail]);
+  }, [siName]);
 
   // ── Sign Up handlers ─────────────────────────────────────────────────────
 
@@ -340,10 +327,8 @@ function LoginContent() {
 
   return (
     <div className="min-h-screen grid lg:grid-cols-2 bg-white" style={{ color: '#111827' }}>
-      {/* Left brand panel */}
       <BrandPanel />
 
-      {/* Right form panel */}
       <div className="flex items-center justify-center p-6 sm:p-10">
         <div className="w-full max-w-sm">
           {/* Mobile logo */}
@@ -380,7 +365,7 @@ function LoginContent() {
                 <form onSubmit={handleSendOtp} className="space-y-5">
                   <div>
                     <h1 className="text-2xl font-bold text-gray-900 mb-1">Welcome back</h1>
-                    <p className="text-sm text-gray-500">Sign in with your email address</p>
+                    <p className="text-sm text-gray-500">Sign in with your registered name</p>
                   </div>
 
                   {siError && (
@@ -391,22 +376,22 @@ function LoginContent() {
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                      Email address
+                      Your name
                     </label>
                     <input
-                      type="email"
+                      type="text"
                       required
-                      autoComplete="email"
-                      value={siEmail}
-                      onChange={(e) => setSiEmail(e.target.value)}
-                      placeholder="you@example.com"
+                      autoComplete="name"
+                      value={siName}
+                      onChange={(e) => setSiName(e.target.value)}
+                      placeholder="Rahul Sharma"
                       className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 text-sm transition-all"
                     />
                   </div>
 
                   <button
                     type="submit"
-                    disabled={siLoading || !siEmail}
+                    disabled={siLoading || !siName.trim()}
                     className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white rounded-xl font-semibold text-sm transition-colors flex items-center justify-center gap-2"
                   >
                     {siLoading ? (
@@ -441,25 +426,23 @@ function LoginContent() {
                     </button>
                     <h1 className="text-2xl font-bold text-gray-900 mb-1">Enter OTP</h1>
                     <p className="text-sm text-gray-500">
-                      We sent a 6-digit code to<br />
-                      <span className="font-medium text-gray-700">{siEmail}</span>
+                      Signing in as{' '}
+                      <span className="font-medium text-gray-700">{siName}</span>
                     </p>
                   </div>
 
-                  {/* Dev mode helper */}
-                  {siDevOtp && (
-                    <div className="text-xs bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-amber-700">
-                      <span className="font-semibold">Dev mode OTP:</span>{' '}
-                      <button
-                        type="button"
-                        onClick={() => setSiOtp(siDevOtp)}
-                        className="font-mono font-bold underline cursor-pointer"
-                      >
-                        {siDevOtp}
-                      </button>
-                      <span className="text-amber-500 ml-1">(click to fill)</span>
-                    </div>
-                  )}
+                  {/* Default OTP hint — always shown */}
+                  <div className="text-xs bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-blue-700">
+                    <span className="font-semibold">Default OTP:</span>{' '}
+                    <button
+                      type="button"
+                      onClick={() => setSiOtp('000000')}
+                      className="font-mono font-bold underline cursor-pointer"
+                    >
+                      000000
+                    </button>
+                    <span className="text-blue-500 ml-1">(click to fill)</span>
+                  </div>
 
                   {siError && (
                     <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-4 py-3">

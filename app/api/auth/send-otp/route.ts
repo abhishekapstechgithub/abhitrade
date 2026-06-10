@@ -1,43 +1,52 @@
 export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
 import { generateOtp, storeOtp, sendOtp } from '@/lib/otp';
-import { getUserByEmail } from '@/lib/db/repositories';
+import { getUserByEmail, getUserByName } from '@/lib/db/repositories';
 import { isDbAvailable } from '@/lib/db/client';
 import { isRedisAvailable } from '@/lib/redis-client';
 
 export async function POST(req: NextRequest) {
   try {
-    const { email } = await req.json();
-    if (!email?.trim()) {
-      return NextResponse.json({ error: 'Email is required' }, { status: 400 });
-    }
+    const { email, name } = await req.json();
 
-    const emailLower = email.trim().toLowerCase();
-    const emailRx = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRx.test(emailLower)) {
-      return NextResponse.json({ error: 'Invalid email address' }, { status: 400 });
+    const hasName  = !!name?.trim();
+    const hasEmail = !!email?.trim();
+
+    if (!hasName && !hasEmail) {
+      return NextResponse.json({ error: 'Name or email is required' }, { status: 400 });
     }
 
     if (!(await isRedisAvailable())) {
       return NextResponse.json({ error: 'Service unavailable — Redis offline' }, { status: 503 });
     }
 
-    // Check if user exists (for login flow)
     let userExists = false;
+    let userEmail  = '';
+
     if (await isDbAvailable()) {
-      const user = await getUserByEmail(emailLower);
-      userExists = !!user;
+      if (hasName) {
+        const user = await getUserByName(name.trim());
+        userExists = !!user;
+        if (user) userEmail = user.email;
+      } else {
+        const emailLower = email.trim().toLowerCase();
+        const user = await getUserByEmail(emailLower);
+        userExists = !!user;
+        if (user) userEmail = user.email;
+      }
+    }
+
+    if (!userExists || !userEmail) {
+      return NextResponse.json({ ok: true, userExists: false });
     }
 
     const otp = generateOtp();
-    await storeOtp(emailLower, otp);
-    const { devOtp } = await sendOtp(emailLower, otp, 'email');
+    await storeOtp(userEmail, otp);
+    const { devOtp } = await sendOtp(userEmail, otp, 'email');
 
     return NextResponse.json({
       ok: true,
-      userExists,
-      message: `OTP sent to ${emailLower}`,
-      // Only returned in development so you can test without email service
+      userExists: true,
       ...(devOtp ? { devOtp } : {}),
     });
   } catch (err) {
