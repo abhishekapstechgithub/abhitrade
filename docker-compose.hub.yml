@@ -102,7 +102,7 @@ services:
     volumes:
       - uploads:/app/tmp/uploads
     environment:
-      - NODE_ENV=development
+      - NODE_ENV=production
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}

@@ -2,10 +2,12 @@
 const nextConfig = {
   output: 'standalone',
 
-  // Keep these heavy server-only packages out of the webpack client bundle.
-  // pg and ioredis use node: protocol imports that webpack can't resolve for
-  // browser/Edge targets.
-  serverExternalPackages: ['pg', 'pg-native', 'ioredis'],
+  experimental: {
+    // Keep these heavy server-only packages out of the webpack client bundle.
+    // pg and ioredis use node: protocol imports that webpack can't resolve for
+    // browser/Edge targets. (Next.js 14 key; renamed to serverExternalPackages in v15)
+    serverComponentsExternalPackages: ['pg', 'pg-native', 'ioredis'],
+  },
 
   images: {
     remotePatterns: [],
