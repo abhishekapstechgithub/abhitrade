@@ -65,6 +65,12 @@ export function Header() {
   const getInitials  = useAuthStore(s => s.getInitials);
   const getFirstName = useAuthStore(s => s.getFirstName);
 
+  // Zustand persist rehydrates from localStorage only on the client.
+  // Without this guard the server renders 'AT' but the client renders the
+  // stored user's initials, causing a React hydration mismatch.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const [marketsMenuOpen, setMarketsMenuOpen] = useState(false);
   const [indicesListOpen, setIndicesListOpen] = useState(false);
   const indicesListRef = useRef<HTMLDivElement | null>(null);
@@ -305,9 +311,9 @@ export function Header() {
             className="flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-md transition-colors hover:bg-white/5">
             <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white"
               style={{ background:'linear-gradient(135deg,#2979ff,#aa00ff)' }}>
-              {getInitials()}
+              {mounted ? getInitials() : 'AT'}
             </div>
-            <span className="hidden xl:block text-xs font-medium" style={{ color:'var(--text-accent)' }}>{getFirstName()}</span>
+            <span className="hidden xl:block text-xs font-medium" style={{ color:'var(--text-accent)' }}>{mounted ? getFirstName() : 'User'}</span>
           </Link>
         </div>
       </div>
