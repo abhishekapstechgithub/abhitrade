@@ -64,7 +64,7 @@ const FILE_TYPES: { id: FileType; label: string; exchange: string; segment: stri
     segment: 'FO',
     desc: 'BSE Futures & Options — contract master',
     color: '#dc2626',
-    collections: ['BSE_D_OPTSTK'],
+    collections: ['BSE_D_FUTIDX', 'BSE_D_FUTSTK', 'BSE_D_OPTIDX', 'BSE_D_OPTSTK'],
   },
 ];
 
@@ -403,7 +403,10 @@ export default function SecurityMasterPage() {
                   ['NSE_FO', 'FO', 'OPTSTK',         'NSE_D_OPTSTK',  '#059669'],
                   ['NSE_FO', 'FO', 'FUTIDX',         'NSE_D_FUTIDX',  '#059669'],
                   ['NSE_FO', 'FO', 'FUTSTK',         'NSE_D_FUTSTK',  '#059669'],
-                  ['BSE_FO', 'FO', 'All (SO/Options)','BSE_D_OPTSTK', '#dc2626'],
+                  ['BSE_FO', 'FO', 'OPTIDX / IO',    'BSE_D_OPTIDX',  '#dc2626'],
+                  ['BSE_FO', 'FO', 'OPTSTK / SO',    'BSE_D_OPTSTK',  '#dc2626'],
+                  ['BSE_FO', 'FO', 'FUTIDX / IF',    'BSE_D_FUTIDX',  '#dc2626'],
+                  ['BSE_FO', 'FO', 'FUTSTK / SF',    'BSE_D_FUTSTK',  '#dc2626'],
                 ].map(([type, seg, instr, col, color]) => (
                   <tr key={`${type}-${col}`}>
                     <td className="py-2 pr-4 font-bold" style={{ color: color as string }}>{type}</td>

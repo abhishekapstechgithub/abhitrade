@@ -53,19 +53,28 @@ function parseDate(raw: string | undefined): string | undefined {
 
 function toInstrumentType(fileType: FileType, row: Record<string, string>): string {
   if (fileType === 'NSE_CM' || fileType === 'BSE_CM') {
-    // SctySrs: EQ, BE, BZ, SM, etc. — map to EQ / IDX / others
     const srs = (row['SctySrs'] ?? '').toUpperCase();
     if (srs === 'EQ' || srs === 'BE' || srs === 'BZ') return 'EQ';
     if (srs === 'INDEX' || srs === 'IDX') return 'IDX';
     return srs || 'EQ';
   }
-  // FO files: FinInstrmNm = OPTIDX|OPTSTK|FUTIDX|FUTSTK (NSE) or SO|SF (BSE)
-  const nm = (row['FinInstrmNm'] ?? '').toUpperCase().trim();
-  const opt = (row['OptnTp'] ?? '').toUpperCase().trim();
-  if (nm.startsWith('OPT') || nm === 'SO') {
-    return opt === 'PE' ? 'PE' : 'CE';
-  }
-  if (nm.startsWith('FUT') || nm === 'SF') return 'FUT';
+
+  // FO files (both NSE and BSE):
+  // FinInstrmNm can be: OPTIDX | OPTSTK | FUTIDX | FUTSTK
+  // BSE also uses abbreviations:  IO/SO → options,  IF/SF → futures
+  const nm  = (row['FinInstrmNm'] ?? '').toUpperCase().trim();
+  const opt = (row['OptnTp']      ?? '').toUpperCase().trim();
+
+  // Exact OPTIDX / OPTSTK
+  if (nm === 'OPTIDX') return opt === 'PE' ? 'PE' : 'CE';   // index option
+  if (nm === 'OPTSTK' || nm === 'SO' || nm === 'IO') return opt === 'PE' ? 'PE' : 'CE'; // stock option
+  // Exact FUTIDX / FUTSTK
+  if (nm === 'FUTIDX' || nm === 'IF') return 'FUTIDX';
+  if (nm === 'FUTSTK' || nm === 'SF') return 'FUTSTK';
+  // Prefix fallback
+  if (nm.startsWith('OPT')) return opt === 'PE' ? 'PE' : 'CE';
+  if (nm.startsWith('FUT')) return 'FUT';
+
   return nm || 'FUT';
 }
 
