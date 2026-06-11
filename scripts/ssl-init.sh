@@ -1,6 +1,6 @@
 #!/bin/bash
 # scripts/ssl-init.sh
-# One-time Let's Encrypt SSL setup for abhitrade.online
+# One-time Let's Encrypt SSL setup for abhitrade.com
 # Run this ONCE on first deploy on your server.
 # After this, certbot auto-renews every 12h via the certbot container.
 #
@@ -10,7 +10,7 @@
 
 set -e
 
-DOMAIN="abhitrade.online"
+DOMAIN="abhitrade.com"
 EMAIL="abhishekdevopstech@gmail.com"
 COMPOSE_FILE="${1:-docker-compose.yml}"
 
