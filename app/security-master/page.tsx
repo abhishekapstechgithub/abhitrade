@@ -1,81 +1,110 @@
 'use client';
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Upload, File, CheckCircle, XCircle, RefreshCw, Database, Search } from 'lucide-react';
-import { cn } from '@/lib/utils/format';
-import { Card } from '@/components/ui/Card';
-import { Button } from '@/components/ui/Button';
-import { Badge } from '@/components/ui/Badge';
+import {
+  Upload, File, CheckCircle, XCircle, RefreshCw,
+  Database, ChevronRight, Clock, AlertCircle,
+} from 'lucide-react';
 
-const COLUMN_MAPPINGS = [
-  'Symbol', 'Instrument Token', 'Exchange Token', 'Expiry', 'Strike',
-  'Option Type', 'Lot Size', 'Tick Size', 'Segment', 'Trading Symbol',
-  'Underlying', 'ISIN', 'Series', 'Freeze Qty', 'Instrument Type',
-];
+// ─── Types ────────────────────────────────────────────────────────────────────
+type FileType = 'NSE_CM' | 'BSE_CM' | 'NSE_FO' | 'BSE_FO';
 
 interface JobStatus {
   jobId: string;
   status: string;
   progress: number;
   filename?: string;
-  format?: string;
+  fileType?: string;
+  segment?: string;
   exchange?: string;
   totalRows?: number;
-  valid?: number;
-  invalid?: number;
+  inserted?: number;
+  updated?: number;
+  failed?: number;
   loaded?: number;
   durationMs?: number;
   error?: string;
   completedAt?: string;
   createdAt?: string;
+  collections?: string; // JSON string
 }
 
-interface RedisStats {
-  totalEntries: number;
-  nseEntries: number;
-  bseEntries: number;
-  available: boolean;
+// ─── File type config ─────────────────────────────────────────────────────────
+const FILE_TYPES: { id: FileType; label: string; exchange: string; segment: string; desc: string; color: string; collections: string[] }[] = [
+  {
+    id: 'NSE_CM',
+    label: 'NSE CM',
+    exchange: 'NSE',
+    segment: 'CM',
+    desc: 'NSE Cash Market — Equity security master',
+    color: '#2563eb',
+    collections: ['NSE_E_EQUITY'],
+  },
+  {
+    id: 'BSE_CM',
+    label: 'BSE CM',
+    exchange: 'BSE',
+    segment: 'CM',
+    desc: 'BSE Cash Market — Equity scrip master',
+    color: '#7c3aed',
+    collections: ['BSE_E_EQUITY'],
+  },
+  {
+    id: 'NSE_FO',
+    label: 'NSE F&O',
+    exchange: 'NSE',
+    segment: 'FO',
+    desc: 'NSE Futures & Options — contract master',
+    color: '#059669',
+    collections: ['NSE_D_FUTIDX', 'NSE_D_FUTSTK', 'NSE_D_OPTIDX', 'NSE_D_OPTSTK'],
+  },
+  {
+    id: 'BSE_FO',
+    label: 'BSE F&O',
+    exchange: 'BSE',
+    segment: 'FO',
+    desc: 'BSE Futures & Options — contract master',
+    color: '#dc2626',
+    collections: ['BSE_D_OPTSTK'],
+  },
+];
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function fmtBytes(n: number) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + ' MB';
+  return (n / 1024).toFixed(0) + ' KB';
+}
+function fmtDur(ms?: number) {
+  if (!ms) return '—';
+  return ms >= 60000 ? (ms / 60000).toFixed(1) + 'm' : (ms / 1000).toFixed(1) + 's';
 }
 
-interface SearchResult {
-  token: string;
-  exchange: string;
-  symbol: string;
-  tradingSymbol: string;
-  name: string;
-  instrumentType: string;
-  expiry?: string;
-  strike?: number;
-  optionType?: string;
-}
-
+// ─── Page ─────────────────────────────────────────────────────────────────────
 export default function SecurityMasterPage() {
-  const [dragOver, setDragOver] = useState(false);
+  const [fileType, setFileType]       = useState<FileType | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [overwrite, setOverwrite] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [activeJob, setActiveJob] = useState<JobStatus | null>(null);
-  const [jobHistory, setJobHistory] = useState<JobStatus[]>([]);
-  const [redisStats, setRedisStats] = useState<RedisStats | null>(null);
-  const [testQuery, setTestQuery] = useState('');
-  const [clearing, setClearing] = useState(false);
-  const [clearResult, setClearResult] = useState<{ deleted: number; message: string } | null>(null);
-  const [testResults, setTestResults] = useState<SearchResult[]>([]);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const pollRef = useRef<NodeJS.Timeout | null>(null);
+  const [overwrite, setOverwrite]     = useState(false);
+  const [dragOver, setDragOver]       = useState(false);
+  const [uploading, setUploading]     = useState(false);
+  const [activeJob, setActiveJob]     = useState<JobStatus | null>(null);
+  const [jobHistory, setJobHistory]   = useState<JobStatus[]>([]);
+  const [mongoStatus, setMongoStatus] = useState<'checking' | 'ok' | 'error'>('checking');
+  const fileRef  = useRef<HTMLInputElement>(null);
+  const pollRef  = useRef<NodeJS.Timeout | null>(null);
 
-  // Load Redis stats on mount and periodically
-  const fetchStats = useCallback(async () => {
+  // Check MongoDB reachability via health endpoint
+  const checkMongo = useCallback(async () => {
     try {
-      const r = await fetch('/api/redis-stats');
-      if (r.ok) setRedisStats(await r.json());
-    } catch { /* ignore */ }
+      const r = await fetch('/api/health');
+      const d = await r.json();
+      setMongoStatus(d.mongo === 'ok' ? 'ok' : 'error');
+    } catch { setMongoStatus('error'); }
   }, []);
 
   useEffect(() => {
-    fetchStats();
-    const id = setInterval(fetchStats, 15000);
+    checkMongo();
+    const id = setInterval(checkMongo, 20_000);
     return () => clearInterval(id);
-  }, [fetchStats]);
+  }, [checkMongo]);
 
   // Poll job status
   const startPolling = useCallback((jobId: string) => {
@@ -90,46 +119,39 @@ export default function SecurityMasterPage() {
             clearInterval(pollRef.current!);
             pollRef.current = null;
             setUploading(false);
-            setJobHistory(prev => [job, ...prev.filter(j => j.jobId !== job.jobId)]);
-            fetchStats();
+            setJobHistory(prev => [job, ...prev.filter(j => j.jobId !== job.jobId)].slice(0, 20));
           }
         }
       } catch { /* ignore */ }
-    }, 1000);
-  }, [fetchStats]);
+    }, 800);
+  }, []);
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
-  const handleFile = (file: File) => {
-    setSelectedFile(file);
-    setActiveJob(null);
-  };
+  const handleFile = (file: File) => { setSelectedFile(file); setActiveJob(null); };
 
   const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    const file = e.dataTransfer.files[0];
-    if (file) handleFile(file);
+    e.preventDefault(); setDragOver(false);
+    const f = e.dataTransfer.files[0];
+    if (f) handleFile(f);
   }, []);
 
   const handleUpload = async () => {
-    if (!selectedFile || uploading) return;
-    setUploading(true);
-    setActiveJob(null);
-
+    if (!selectedFile || !fileType || uploading) return;
+    setUploading(true); setActiveJob(null);
     const fd = new FormData();
     fd.append('file', selectedFile);
+    fd.append('fileType', fileType);
     fd.append('overwrite', String(overwrite));
-
     try {
-      const r = await fetch('/api/upload', { method: 'POST', body: fd });
+      const r    = await fetch('/api/upload', { method: 'POST', body: fd });
       const data = await r.json();
       if (!r.ok) {
         setActiveJob({ jobId: '', status: 'error', progress: 0, error: data.error });
         setUploading(false);
         return;
       }
-      setActiveJob({ jobId: data.jobId, status: 'queued', progress: 0, filename: selectedFile.name });
+      setActiveJob({ jobId: data.jobId, status: 'queued', progress: 0, filename: selectedFile.name, fileType });
       startPolling(data.jobId);
     } catch (e) {
       setActiveJob({ jobId: '', status: 'error', progress: 0, error: String(e) });
@@ -137,324 +159,326 @@ export default function SecurityMasterPage() {
     }
   };
 
-  // Live search test
-  useEffect(() => {
-    if (!testQuery || testQuery.length < 2) { setTestResults([]); return; }
-    const timer = setTimeout(async () => {
-      try {
-        const r = await fetch(`/api/search?q=${encodeURIComponent(testQuery)}&limit=8`);
-        if (r.ok) {
-          const data = await r.json();
-          setTestResults(data.results ?? []);
-        }
-      } catch { /* ignore */ }
-    }, 200);
-    return () => clearTimeout(timer);
-  }, [testQuery]);
-
-  const handleClearRedis = async () => {
-    if (!confirm('This will delete all instrument data from Redis (tk:* keys). The data in PostgreSQL is NOT affected. Continue?')) return;
-    setClearing(true);
-    setClearResult(null);
-    try {
-      const r = await fetch('/api/redis-clear', { method: 'DELETE' });
-      const data = await r.json();
-      if (r.ok) {
-        setClearResult({ deleted: data.deleted, message: data.message });
-        fetchStats();
-      } else {
-        alert(data.error ?? 'Failed to clear Redis');
-      }
-    } catch (e) {
-      alert('Request failed');
-    } finally {
-      setClearing(false);
-    }
-  };
-
-  const progressPct = activeJob?.progress ?? 0;
-  const isDone = activeJob?.status === 'done';
+  const isDone  = activeJob?.status === 'done';
   const isError = activeJob?.status === 'error';
+  const pct     = activeJob?.progress ?? 0;
+  const ft      = FILE_TYPES.find(f => f.id === fileType);
+
+  // Parse collections JSON from job
+  function parseCollections(job: JobStatus): Record<string, number> {
+    try { return job.collections ? JSON.parse(job.collections) : {}; } catch { return {}; }
+  }
 
   return (
-    <div className="max-w-[1200px] mx-auto px-4 py-4 space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">Security Master Upload</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Upload NSE/BSE security master CSV files to load contracts into Redis</p>
+    <div className="min-h-screen bg-gray-50">
+      <div className="max-w-5xl mx-auto px-4 py-6 space-y-5">
+
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-bold text-gray-900">Security Master Upload</h1>
+            <p className="text-sm text-gray-500 mt-0.5">Upload exchange security master files — data is stored in MongoDB</p>
+          </div>
+          <div className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-medium border
+            ${mongoStatus === 'ok' ? 'bg-green-50 border-green-200 text-green-700' :
+              mongoStatus === 'error' ? 'bg-red-50 border-red-200 text-red-600' :
+              'bg-gray-50 border-gray-200 text-gray-500'}`}>
+            <Database size={12} />
+            {mongoStatus === 'ok' ? 'MongoDB Connected' : mongoStatus === 'error' ? 'MongoDB Offline' : 'Checking…'}
+          </div>
         </div>
-        <div className="flex items-center gap-2 text-xs">
-          <div className={cn(
-            'flex items-center gap-1.5 px-3 py-1.5 border rounded-lg',
-            redisStats?.available ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200',
-          )}>
-            <Database size={13} className={redisStats?.available ? 'text-green-600' : 'text-red-500'} />
-            <span className={cn('font-medium', redisStats?.available ? 'text-green-700' : 'text-red-600')}>
-              {redisStats?.available ? 'Redis: Connected' : 'Redis: Offline'}
+
+        {/* Step 1 — File Type Selector */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <span className="w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center shrink-0">1</span>
+            <span className="text-sm font-semibold text-gray-900">Select File Type</span>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {FILE_TYPES.map(ft => (
+              <button
+                key={ft.id}
+                onClick={() => { setFileType(ft.id); setActiveJob(null); }}
+                className={`relative p-4 rounded-xl border-2 text-left transition-all ${
+                  fileType === ft.id
+                    ? 'border-current shadow-md'
+                    : 'border-gray-200 hover:border-gray-300 bg-white'
+                }`}
+                style={fileType === ft.id ? { borderColor: ft.color, background: `${ft.color}0d` } : {}}>
+                {/* Exchange badge */}
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[11px] font-bold px-1.5 py-0.5 rounded"
+                    style={{ background: `${ft.color}20`, color: ft.color }}>
+                    {ft.exchange}
+                  </span>
+                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+                    style={{ background: ft.segment === 'CM' ? '#dbeafe' : '#dcfce7', color: ft.segment === 'CM' ? '#1d4ed8' : '#15803d' }}>
+                    {ft.segment}
+                  </span>
+                </div>
+                <div className="text-base font-bold" style={{ color: ft.color }}>{ft.label}</div>
+                <div className="text-[10px] text-gray-500 mt-0.5 leading-tight">{ft.desc}</div>
+                {/* Collections preview */}
+                <div className="mt-2 space-y-0.5">
+                  {ft.collections.map(c => (
+                    <div key={c} className="text-[9px] font-mono px-1.5 py-0.5 rounded"
+                      style={{ background: `${ft.color}15`, color: ft.color }}>
+                      → {c}
+                    </div>
+                  ))}
+                </div>
+                {fileType === ft.id && (
+                  <div className="absolute top-2 right-2">
+                    <CheckCircle size={14} style={{ color: ft.color }} />
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Step 2 — File Upload */}
+        <div className={`bg-white rounded-xl border shadow-sm p-5 transition-opacity ${!fileType ? 'opacity-50 pointer-events-none' : ''}`}
+          style={{ borderColor: fileType && ft ? `${ft.color}40` : '#e5e7eb' }}>
+          <div className="flex items-center gap-2 mb-4">
+            <span className="w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center shrink-0">2</span>
+            <span className="text-sm font-semibold text-gray-900">
+              Upload {fileType ?? 'File'}
+              {fileType && <span className="ml-2 text-xs font-normal text-gray-500">segment will be set to <strong>{ft?.segment}</strong></span>}
             </span>
           </div>
-        </div>
-      </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-        {/* Upload panel */}
-        <div className="xl:col-span-2 space-y-4">
-          <Card>
-            <h2 className="text-sm font-semibold text-gray-900 mb-3">Upload File</h2>
-
-            {/* Drop zone */}
-            <div
-              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={handleDrop}
-              onClick={() => fileRef.current?.click()}
-              className={cn(
-                'border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors',
-                dragOver ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-blue-400 hover:bg-gray-50',
-              )}>
-              <input ref={fileRef} type="file" accept=".csv,.txt" className="hidden"
-                onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} />
-              <Upload size={32} className={cn('mx-auto mb-3', dragOver ? 'text-blue-600' : 'text-gray-400')} />
-              {selectedFile ? (
-                <div className="space-y-1">
-                  <div className="flex items-center justify-center gap-2">
-                    <File size={16} className="text-blue-600" />
-                    <span className="text-sm font-semibold text-gray-900">{selectedFile.name}</span>
-                  </div>
-                  <div className="text-xs text-gray-500">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB</div>
+          {/* Drop zone */}
+          <div
+            onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={handleDrop}
+            onClick={() => fileRef.current?.click()}
+            className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors ${
+              dragOver ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-blue-300 hover:bg-gray-50'
+            }`}>
+            <input ref={fileRef} type="file" accept=".csv,.txt" className="hidden"
+              onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} />
+            <Upload size={28} className={`mx-auto mb-3 ${dragOver ? 'text-blue-500' : 'text-gray-300'}`} />
+            {selectedFile ? (
+              <div className="space-y-1">
+                <div className="flex items-center justify-center gap-2">
+                  <File size={15} className="text-blue-600" />
+                  <span className="text-sm font-semibold text-gray-900">{selectedFile.name}</span>
                 </div>
-              ) : (
-                <>
-                  <p className="text-sm text-gray-700 font-medium">Drop file here or click to browse</p>
-                  <p className="text-xs text-gray-400 mt-1">Supports .csv, .txt up to 100 MB</p>
-                  <p className="text-xs text-gray-400">NSE_CM / NSE_FO / BSE_EQD / BSE_EQ formats auto-detected</p>
-                </>
-              )}
-            </div>
-
-            {/* Options row */}
-            <div className="flex items-center gap-4 mt-4">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={overwrite} onChange={e => setOverwrite(e.target.checked)}
-                  className="rounded border-gray-300 text-blue-600" />
-                <span className="text-xs text-gray-600">Overwrite existing records</span>
-              </label>
-            </div>
-
-            {/* Progress bar */}
-            {(uploading || activeJob) && (
-              <div className="mt-4 space-y-2">
-                <div className="flex items-center justify-between text-xs text-gray-600">
-                  <span>
-                    {activeJob?.status === 'queued' && 'Queued...'}
-                    {activeJob?.status === 'parsing' && 'Parsing CSV...'}
-                    {activeJob?.status === 'loading' && `Loading into Redis... ${activeJob.loaded?.toLocaleString('en-IN') ?? 0} / ${activeJob.valid?.toLocaleString('en-IN') ?? '?'}`}
-                    {activeJob?.status === 'done' && 'Complete!'}
-                    {activeJob?.status === 'error' && 'Error'}
-                  </span>
-                  <span>{progressPct.toFixed(0)}%</span>
-                </div>
-                <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
-                  <div
-                    className={cn('h-full rounded-full transition-all duration-300',
-                      isError ? 'bg-red-500' : isDone ? 'bg-green-500' : 'bg-blue-600')}
-                    style={{ width: `${progressPct}%` }} />
-                </div>
-                {activeJob?.format && (
-                  <div className="text-xs text-gray-400">
-                    Format: <span className="font-medium text-gray-600">{activeJob.format}</span>
-                    {activeJob.exchange && <> · Exchange: <span className="font-medium text-gray-600">{activeJob.exchange}</span></>}
-                    {activeJob.totalRows && <> · {activeJob.totalRows.toLocaleString('en-IN')} rows</>}
-                  </div>
-                )}
+                <div className="text-xs text-gray-400">{fmtBytes(selectedFile.size)}</div>
               </div>
+            ) : (
+              <>
+                <p className="text-sm font-medium text-gray-600">Drop CSV file here or click to browse</p>
+                <p className="text-xs text-gray-400 mt-1">Supports .csv · .txt · up to 200 MB</p>
+              </>
             )}
-
-            {isDone && (
-              <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg">
-                <div className="flex items-center gap-2 mb-1">
-                  <CheckCircle size={14} className="text-green-600 shrink-0" />
-                  <span className="text-sm font-semibold text-green-700">Loaded into Redis successfully</span>
-                </div>
-                {activeJob && (
-                  <div className="text-xs text-green-600 space-x-3 ml-5">
-                    <span>✓ {activeJob.valid?.toLocaleString('en-IN')} valid</span>
-                    <span>✗ {activeJob.invalid} invalid</span>
-                    <span>⏱ {activeJob.durationMs ? (activeJob.durationMs / 1000).toFixed(1) + 's' : ''}</span>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {isError && (
-              <div className="mt-3 flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
-                <XCircle size={14} className="text-red-500 shrink-0 mt-0.5" />
-                <span className="text-sm text-red-700">{activeJob?.error ?? 'Upload failed'}</span>
-              </div>
-            )}
-
-            <div className="mt-4 flex gap-2">
-              <Button variant="primary" onClick={handleUpload} disabled={!selectedFile || uploading} className="flex-1">
-                {uploading ? <RefreshCw size={13} className="animate-spin" /> : <Upload size={13} />}
-                {uploading ? 'Processing...' : 'Upload & Import'}
-              </Button>
-              {selectedFile && (
-                <Button variant="outline" onClick={() => { setSelectedFile(null); setActiveJob(null); }}>
-                  Clear
-                </Button>
-              )}
-            </div>
-          </Card>
-
-          {/* Column mapping */}
-          <Card>
-            <h2 className="text-sm font-semibold text-gray-900 mb-3">Supported Column Mapping</h2>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-              {COLUMN_MAPPINGS.map((col) => (
-                <div key={col} className="flex items-center gap-2 p-2 border border-gray-200 rounded-lg">
-                  <div className="w-2 h-2 bg-blue-400 rounded-full shrink-0" />
-                  <span className="text-xs font-medium text-gray-700">{col}</span>
-                </div>
-              ))}
-            </div>
-            <p className="text-xs text-gray-400 mt-3">Auto-detected from abbreviated NSE/BSE column headers (FinInstrmId, TckrSymb, XpryDt, StrkPric…)</p>
-          </Card>
-        </div>
-
-        {/* Sidebar */}
-        <div className="space-y-4">
-          {/* Redis stats */}
-          <Card>
-            <h3 className="text-sm font-semibold text-gray-900 mb-3">Redis Index Stats</h3>
-            <div className="space-y-3">
-              {[
-                { label: 'Autocomplete Entries', value: redisStats?.totalEntries.toLocaleString('en-IN') ?? '—' },
-                { label: 'NSE Entries', value: redisStats?.nseEntries.toLocaleString('en-IN') ?? '—' },
-                { label: 'BSE Entries', value: redisStats?.bseEntries.toLocaleString('en-IN') ?? '—' },
-                { label: 'Redis Status', value: redisStats?.available ? 'Online ✓' : 'Offline ✗' },
-              ].map((stat) => (
-                <div key={stat.label} className="flex justify-between items-center py-1.5 border-b border-gray-50 last:border-0">
-                  <span className="text-xs text-gray-500">{stat.label}</span>
-                  <span className="text-xs font-semibold text-gray-900">{stat.value}</span>
-                </div>
-              ))}
-            </div>
-            <div className="mt-3 flex items-center gap-2">
-              <button onClick={fetchStats} className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700">
-                <RefreshCw size={11} /> Refresh
-              </button>
-              <button
-                onClick={handleClearRedis}
-                disabled={clearing || !redisStats?.available}
-                className="flex items-center gap-1 text-xs text-red-600 hover:text-red-700 disabled:opacity-40 disabled:cursor-not-allowed ml-auto"
-              >
-                <XCircle size={11} /> {clearing ? 'Clearing…' : 'Clear Redis'}
-              </button>
-            </div>
-            {clearResult && (
-              <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded-lg">
-                <p className="text-xs text-green-700 font-medium">{clearResult.message}</p>
-              </div>
-            )}
-          </Card>
-
-          {/* Live search test */}
-          <Card>
-            <h3 className="text-sm font-semibold text-gray-900 mb-3">Live Search Test</h3>
-            <div className="relative mb-3">
-              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                value={testQuery}
-                onChange={e => setTestQuery(e.target.value)}
-                placeholder="Type RELIANCE, NIFTY..."
-                className="w-full h-8 pl-8 pr-3 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-            <div className="space-y-1.5 max-h-56 overflow-y-auto">
-              {testResults.length === 0 && testQuery.length >= 2 && (
-                <p className="text-xs text-gray-400 text-center py-3">No results found</p>
-              )}
-              {testResults.map((r) => (
-                <div key={`${r.exchange}:${r.token}`} className="flex items-center gap-2 px-2 py-1.5 bg-gray-50 rounded-md hover:bg-gray-100">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-semibold text-gray-900 truncate">{r.tradingSymbol}</div>
-                    <div className="text-xs text-gray-400 truncate">{r.name}</div>
-                  </div>
-                  <div className="shrink-0 flex gap-1">
-                    <span className="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded font-medium">{r.exchange}</span>
-                    <span className={cn('text-xs px-1.5 py-0.5 rounded font-medium',
-                      r.instrumentType === 'EQ' ? 'bg-gray-100 text-gray-600' :
-                      r.instrumentType === 'CE' ? 'bg-green-100 text-green-700' :
-                      r.instrumentType === 'PE' ? 'bg-red-100 text-red-700' :
-                      'bg-orange-100 text-orange-700'
-                    )}>{r.instrumentType}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          {/* Bulk load hint */}
-          <Card>
-            <h3 className="text-sm font-semibold text-gray-900 mb-2">CLI Bulk Load</h3>
-            <p className="text-xs text-gray-500 mb-2">Pre-load all 4 CSV files without the UI:</p>
-            <pre className="text-xs bg-gray-900 text-green-400 p-2.5 rounded-lg overflow-x-auto">
-{`node scripts/bulk-load.mjs`}
-            </pre>
-            <p className="text-xs text-gray-400 mt-2">Edit file paths at the top of <code className="font-mono bg-gray-100 px-1 rounded">scripts/bulk-load.mjs</code></p>
-          </Card>
-        </div>
-      </div>
-
-      {/* Job history */}
-      {jobHistory.length > 0 && (
-        <Card padding="none">
-          <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-gray-900">Upload History (this session)</h2>
-            <Badge variant="neutral" size="sm">{jobHistory.length} job{jobHistory.length !== 1 ? 's' : ''}</Badge>
           </div>
+
+          {/* Options */}
+          <div className="flex items-center gap-6 mt-3">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" checked={overwrite} onChange={e => setOverwrite(e.target.checked)}
+                className="rounded border-gray-300 text-blue-600" />
+              <span className="text-xs text-gray-600">Overwrite existing records (by FinInstrmId)</span>
+            </label>
+          </div>
+
+          {/* Progress */}
+          {(uploading || activeJob) && (
+            <div className="mt-4 space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-gray-600">
+                  {activeJob?.status === 'queued'  && 'Queued…'}
+                  {activeJob?.status === 'parsing' && 'Parsing CSV…'}
+                  {activeJob?.status === 'loading' && `Inserting into MongoDB… ${(activeJob.loaded ?? 0).toLocaleString('en-IN')} / ${(activeJob.totalRows ?? 0).toLocaleString('en-IN')}`}
+                  {activeJob?.status === 'done'    && '✓ Done'}
+                  {activeJob?.status === 'error'   && '✗ Error'}
+                </span>
+                <span className="font-mono font-semibold" style={{ color: isError ? '#ef4444' : isDone ? '#16a34a' : '#2563eb' }}>
+                  {pct.toFixed(0)}%
+                </span>
+              </div>
+              <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+                <div className="h-full rounded-full transition-all duration-300"
+                  style={{
+                    width: `${pct}%`,
+                    background: isError ? '#ef4444' : isDone ? '#16a34a' : (ft?.color ?? '#2563eb'),
+                  }} />
+              </div>
+              {activeJob?.fileType && (
+                <div className="text-[11px] text-gray-400 flex gap-3">
+                  <span>Type: <span className="font-semibold text-gray-700">{activeJob.fileType}</span></span>
+                  <span>Segment: <span className="font-semibold text-gray-700">{activeJob.segment}</span></span>
+                  {activeJob.totalRows && <span>Rows: <span className="font-semibold text-gray-700">{Number(activeJob.totalRows).toLocaleString('en-IN')}</span></span>}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Done summary */}
+          {isDone && activeJob && (
+            <div className="mt-3 p-4 bg-green-50 border border-green-200 rounded-xl">
+              <div className="flex items-center gap-2 mb-2">
+                <CheckCircle size={14} className="text-green-600" />
+                <span className="text-sm font-semibold text-green-700">Import complete</span>
+                <span className="ml-auto text-xs text-green-500">{fmtDur(Number(activeJob.durationMs))}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-3 text-center">
+                {[
+                  { label: 'Total Rows', val: Number(activeJob.totalRows ?? 0).toLocaleString('en-IN'), c: 'text-gray-700' },
+                  { label: 'Inserted',   val: Number(activeJob.inserted  ?? 0).toLocaleString('en-IN'), c: 'text-green-700 font-bold' },
+                  { label: 'Updated',    val: Number(activeJob.updated   ?? 0).toLocaleString('en-IN'), c: 'text-blue-700' },
+                ].map(s => (
+                  <div key={s.label} className="p-2 bg-white rounded-lg border border-green-100">
+                    <div className={`text-sm font-bold ${s.c}`}>{s.val}</div>
+                    <div className="text-[10px] text-gray-400">{s.label}</div>
+                  </div>
+                ))}
+              </div>
+              {/* Per-collection breakdown */}
+              {activeJob.collections && Object.keys(parseCollections(activeJob)).length > 0 && (
+                <div className="mt-3 space-y-1">
+                  <div className="text-[10px] font-semibold text-green-700 uppercase tracking-wide">Collections written:</div>
+                  {Object.entries(parseCollections(activeJob)).map(([col, cnt]) => (
+                    <div key={col} className="flex items-center justify-between text-xs px-2 py-1 bg-white rounded border border-green-100">
+                      <span className="font-mono text-gray-700">{col}</span>
+                      <span className="font-bold text-green-700">{Number(cnt).toLocaleString('en-IN')}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Error */}
+          {isError && (
+            <div className="mt-3 flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-xl">
+              <AlertCircle size={14} className="text-red-500 shrink-0 mt-0.5" />
+              <span className="text-sm text-red-700">{activeJob?.error ?? 'Upload failed'}</span>
+            </div>
+          )}
+
+          {/* Action buttons */}
+          <div className="mt-4 flex gap-2">
+            <button
+              onClick={handleUpload}
+              disabled={!selectedFile || !fileType || uploading}
+              className="flex-1 flex items-center justify-center gap-2 h-10 rounded-xl text-sm font-semibold text-white transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{ background: ft?.color ?? '#2563eb' }}>
+              {uploading
+                ? <><RefreshCw size={14} className="animate-spin" /> Processing…</>
+                : <><Upload size={14} /> Upload &amp; Import to MongoDB</>}
+            </button>
+            {selectedFile && (
+              <button
+                onClick={() => { setSelectedFile(null); setActiveJob(null); }}
+                className="px-4 h-10 rounded-xl text-sm font-medium border border-gray-200 hover:bg-gray-50 text-gray-600">
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Collection map reference */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+          <h3 className="text-sm font-semibold text-gray-900 mb-3">Collection Routing</h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
-              <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  {['Job ID', 'File', 'Format', 'Status', 'Total', 'Valid', 'Invalid', 'Duration', 'Completed'].map(h => (
-                    <th key={h} className="text-left px-3 py-2.5 text-gray-500 font-medium whitespace-nowrap">{h}</th>
+              <thead>
+                <tr className="border-b border-gray-100">
+                  {['File Type', 'Segment', 'Instrument Type (FinInstrmNm)', 'MongoDB Collection'].map(h => (
+                    <th key={h} className="text-left py-2 pr-4 text-gray-500 font-medium whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
-              <tbody>
-                {jobHistory.map((job) => (
-                  <tr key={job.jobId} className="border-b border-gray-50 hover:bg-gray-50">
-                    <td className="px-3 py-3 font-mono text-gray-400 text-xs">{job.jobId.slice(0, 8)}…</td>
-                    <td className="px-3 py-3">
-                      <div className="flex items-center gap-1.5">
-                        <File size={12} className="text-gray-400 shrink-0" />
-                        <span className="font-medium text-gray-900 truncate max-w-40">{job.filename}</span>
-                      </div>
+              <tbody className="divide-y divide-gray-50">
+                {[
+                  ['NSE_CM', 'CM', 'All (Equity)',   'NSE_E_EQUITY',  '#2563eb'],
+                  ['BSE_CM', 'CM', 'All (Equity)',   'BSE_E_EQUITY',  '#7c3aed'],
+                  ['NSE_FO', 'FO', 'OPTIDX',         'NSE_D_OPTIDX',  '#059669'],
+                  ['NSE_FO', 'FO', 'OPTSTK',         'NSE_D_OPTSTK',  '#059669'],
+                  ['NSE_FO', 'FO', 'FUTIDX',         'NSE_D_FUTIDX',  '#059669'],
+                  ['NSE_FO', 'FO', 'FUTSTK',         'NSE_D_FUTSTK',  '#059669'],
+                  ['BSE_FO', 'FO', 'All (SO/Options)','BSE_D_OPTSTK', '#dc2626'],
+                ].map(([type, seg, instr, col, color]) => (
+                  <tr key={`${type}-${col}`}>
+                    <td className="py-2 pr-4 font-bold" style={{ color: color as string }}>{type}</td>
+                    <td className="py-2 pr-4">
+                      <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${seg === 'CM' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>{seg}</span>
                     </td>
-                    <td className="px-3 py-3"><Badge variant="info" size="sm">{job.format ?? '—'}</Badge></td>
-                    <td className="px-3 py-3">
-                      <div className="flex items-center gap-1">
-                        {job.status === 'done' ? <CheckCircle size={12} className="text-green-600" /> :
-                          job.status === 'error' ? <XCircle size={12} className="text-red-600" /> :
-                            <RefreshCw size={12} className="text-blue-600 animate-spin" />}
-                        <Badge variant={job.status === 'done' ? 'success' : job.status === 'error' ? 'danger' : 'info'} size="sm">
-                          {job.status}
-                        </Badge>
-                      </div>
-                    </td>
-                    <td className="px-3 py-3 text-gray-700">{job.totalRows?.toLocaleString('en-IN') ?? '—'}</td>
-                    <td className="px-3 py-3 text-green-700 font-semibold">{job.valid?.toLocaleString('en-IN') ?? '—'}</td>
-                    <td className="px-3 py-3 text-red-600">{job.invalid ?? '—'}</td>
-                    <td className="px-3 py-3 text-gray-500">{job.durationMs ? (job.durationMs / 1000).toFixed(1) + 's' : '—'}</td>
-                    <td className="px-3 py-3 text-gray-400">{job.completedAt ? new Date(job.completedAt).toLocaleTimeString('en-IN') : '—'}</td>
+                    <td className="py-2 pr-4 font-mono text-gray-600">{instr}</td>
+                    <td className="py-2 font-mono font-semibold text-gray-900">{col}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </Card>
-      )}
+        </div>
+
+        {/* Job history */}
+        {jobHistory.length > 0 && (
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-900">Upload History</h3>
+              <span className="text-xs text-gray-400">{jobHistory.length} job{jobHistory.length !== 1 ? 's' : ''} this session</span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-gray-50 border-b border-gray-100">
+                  <tr>
+                    {['File', 'Type', 'Segment', 'Status', 'Total', 'Inserted', 'Updated', 'Duration', 'Time'].map(h => (
+                      <th key={h} className="text-left px-4 py-2.5 text-gray-500 font-medium whitespace-nowrap">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {jobHistory.map(job => {
+                    const jft = FILE_TYPES.find(f => f.id === job.fileType);
+                    return (
+                      <tr key={job.jobId} className="border-b border-gray-50 hover:bg-gray-50">
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1.5">
+                            <File size={11} className="text-gray-400 shrink-0" />
+                            <span className="font-medium text-gray-800 truncate max-w-[160px]">{job.filename}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className="font-bold text-[11px]" style={{ color: jft?.color }}>{job.fileType}</span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${job.segment === 'CM' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
+                            {job.segment ?? '—'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1">
+                            {job.status === 'done'  ? <CheckCircle size={11} className="text-green-600" /> :
+                             job.status === 'error' ? <XCircle     size={11} className="text-red-500"   /> :
+                                                      <RefreshCw   size={11} className="text-blue-500 animate-spin" />}
+                            <span className={`font-medium ${job.status === 'done' ? 'text-green-700' : job.status === 'error' ? 'text-red-600' : 'text-blue-600'}`}>
+                              {job.status}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-gray-600">{job.totalRows ? Number(job.totalRows).toLocaleString('en-IN') : '—'}</td>
+                        <td className="px-4 py-3 text-green-700 font-semibold">{job.inserted ? Number(job.inserted).toLocaleString('en-IN') : '—'}</td>
+                        <td className="px-4 py-3 text-blue-700">{job.updated ? Number(job.updated).toLocaleString('en-IN') : '—'}</td>
+                        <td className="px-4 py-3 text-gray-500 font-mono">{fmtDur(Number(job.durationMs))}</td>
+                        <td className="px-4 py-3 text-gray-400 flex items-center gap-1">
+                          <Clock size={10} />
+                          {job.completedAt ? new Date(job.completedAt).toLocaleTimeString('en-IN') : '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
