@@ -1,13 +1,5 @@
 // Server-side only — Bhavcopy EOD price loader
-// Reads CSV files from <project-root>/Bhavcopy/ and updates security_master price columns.
-//
-// Supported formats:
-//   New NSE/BSE (FinInstrmId column present):
-//     TradDt,BizDt,Sgmt,Src,FinInstrmTp,FinInstrmId,ISIN,TckrSymb,SctySrs,XpryDt,
-//     FinInstrmNm,OpnPric,HghPric,LwPric,ClsPric,LastPric,PrvsClsgPric,...TtlTradgVol,OpnIntrst
-//
-//   Old NSE EQ (no FinInstrmId):
-//     SYMBOL,SERIES,OPEN,HIGH,LOW,CLOSE,LAST,PREVCLOSE,TOTTRDQTY,...,ISIN
+// Uses UNNEST bulk updates: one query per file instead of one per row.
 
 import fs   from 'fs';
 import path from 'path';
@@ -23,16 +15,14 @@ export interface BhavcopyResult {
 }
 
 export interface BhavcopyStats {
-  files:       number;
-  totalLoaded: number;
-  totalSkipped:number;
-  results:     BhavcopyResult[];
+  files:        number;
+  totalLoaded:  number;
+  totalSkipped: number;
+  results:      BhavcopyResult[];
 }
 
-// ── SQL ────────────────────────────────────────────────────────────────────────
+// ── Schema migration ───────────────────────────────────────────────────────────
 
-// Run migration once per process lifetime — columns already exist after the
-// first call so subsequent ALTER TABLE IF NOT EXISTS no-ops immediately.
 let _migrationDone = false;
 async function ensureColumns(): Promise<void> {
   if (_migrationDone) return;
@@ -54,42 +44,6 @@ async function ensureColumns(): Promise<void> {
   _migrationDone = true;
 }
 
-// Update by token (new format — FinInstrmId → token)
-const UPDATE_BY_TOKEN_SQL = `
-UPDATE security_master SET
-  ltp              = $1,
-  open_price       = $2,
-  high_price       = $3,
-  low_price        = $4,
-  close_price      = $5,
-  prev_close       = $6,
-  net_change       = $7,
-  change_pct       = $8,
-  volume           = $9,
-  open_interest    = $10,
-  price_date       = $11,
-  price_updated_at = NOW()
-WHERE token = $12
-`;
-
-// Update by symbol + series (old format)
-const UPDATE_BY_SYMBOL_SQL = `
-UPDATE security_master SET
-  ltp              = $1,
-  open_price       = $2,
-  high_price       = $3,
-  low_price        = $4,
-  close_price      = $5,
-  prev_close       = $6,
-  net_change       = $7,
-  change_pct       = $8,
-  volume           = $9,
-  open_interest    = $10,
-  price_date       = $11,
-  price_updated_at = NOW()
-WHERE symbol = $12 AND (series = $13 OR series IS NULL)
-`;
-
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function p(v: string | undefined): number | null {
@@ -106,27 +60,95 @@ function pi(v: string | undefined): number | null {
 
 function parseDate(v: string | undefined): string | null {
   if (!v || v.trim() === '') return null;
-  // Formats: DD-MON-YYYY (20-JAN-2025), YYYY-MM-DD, DD/MM/YYYY
   const s = v.trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
   if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) {
     const [d, m, y] = s.split('/');
     return `${y}-${m}-${d}`;
   }
-  // DD-MON-YYYY  e.g. 11-JUN-2026
-  const m: Record<string,string> = {
+  const MON: Record<string, string> = {
     JAN:'01',FEB:'02',MAR:'03',APR:'04',MAY:'05',JUN:'06',
     JUL:'07',AUG:'08',SEP:'09',OCT:'10',NOV:'11',DEC:'12',
   };
   const match = s.match(/^(\d{2})-([A-Z]{3})-(\d{4})$/i);
-  if (match) return `${match[3]}-${m[match[2].toUpperCase()] ?? '01'}-${match[1]}`;
+  if (match) return `${match[3]}-${MON[match[2].toUpperCase()] ?? '01'}-${match[1]}`;
   return null;
 }
 
-// ── Format detectors ───────────────────────────────────────────────────────────
-
 function isNewFormat(headers: string[]): boolean {
   return headers.some(h => h.trim() === 'FinInstrmId');
+}
+
+// ── Batch SQL ─────────────────────────────────────────────────────────────────
+
+// New format: update by token using UNNEST (single round-trip)
+const BATCH_BY_TOKEN_SQL = `
+UPDATE security_master AS sm SET
+  ltp              = d.ltp::DECIMAL,
+  open_price       = d.open::DECIMAL,
+  high_price       = d.high::DECIMAL,
+  low_price        = d.low::DECIMAL,
+  close_price      = d.close::DECIMAL,
+  prev_close       = d.prev::DECIMAL,
+  net_change       = d.chg::DECIMAL,
+  change_pct       = d.pct::DECIMAL,
+  volume           = d.vol::BIGINT,
+  open_interest    = d.oi::BIGINT,
+  price_date       = d.dt::DATE,
+  price_updated_at = NOW()
+FROM (
+  SELECT
+    UNNEST($1::TEXT[])    AS token,
+    UNNEST($2::TEXT[])    AS ltp,
+    UNNEST($3::TEXT[])    AS open,
+    UNNEST($4::TEXT[])    AS high,
+    UNNEST($5::TEXT[])    AS low,
+    UNNEST($6::TEXT[])    AS close,
+    UNNEST($7::TEXT[])    AS prev,
+    UNNEST($8::TEXT[])    AS chg,
+    UNNEST($9::TEXT[])    AS pct,
+    UNNEST($10::TEXT[])   AS vol,
+    UNNEST($11::TEXT[])   AS oi,
+    UNNEST($12::TEXT[])   AS dt
+) AS d
+WHERE sm.token = d.token
+`;
+
+// Old format: update by symbol+series
+const BATCH_BY_SYMBOL_SQL = `
+UPDATE security_master AS sm SET
+  ltp              = d.ltp::DECIMAL,
+  open_price       = d.open::DECIMAL,
+  high_price       = d.high::DECIMAL,
+  low_price        = d.low::DECIMAL,
+  close_price      = d.close::DECIMAL,
+  prev_close       = d.prev::DECIMAL,
+  net_change       = d.chg::DECIMAL,
+  change_pct       = d.pct::DECIMAL,
+  volume           = d.vol::BIGINT,
+  open_interest    = NULL,
+  price_date       = d.dt::DATE,
+  price_updated_at = NOW()
+FROM (
+  SELECT
+    UNNEST($1::TEXT[])    AS symbol,
+    UNNEST($2::TEXT[])    AS series,
+    UNNEST($3::TEXT[])    AS ltp,
+    UNNEST($4::TEXT[])    AS open,
+    UNNEST($5::TEXT[])    AS high,
+    UNNEST($6::TEXT[])    AS low,
+    UNNEST($7::TEXT[])    AS close,
+    UNNEST($8::TEXT[])    AS prev,
+    UNNEST($9::TEXT[])    AS chg,
+    UNNEST($10::TEXT[])   AS pct,
+    UNNEST($11::TEXT[])   AS vol,
+    UNNEST($12::TEXT[])   AS dt
+) AS d
+WHERE sm.symbol = d.symbol AND (sm.series = d.series OR sm.series IS NULL)
+`;
+
+function str(v: number | null): string {
+  return v == null ? '' : String(v);
 }
 
 // ── Per-file processor ─────────────────────────────────────────────────────────
@@ -134,10 +156,19 @@ function isNewFormat(headers: string[]): boolean {
 async function processFile(filePath: string): Promise<BhavcopyResult> {
   const result: BhavcopyResult = { file: path.basename(filePath), loaded: 0, skipped: 0, errors: [], date: null };
 
-  const content = fs.readFileSync(filePath, 'utf8');
+  let content: string;
+  try {
+    content = fs.readFileSync(filePath, 'utf8');
+  } catch (e) {
+    result.errors.push(`Read error: ${(e as Error).message}`);
+    return result;
+  }
+
   let rows: Record<string, string>[];
   try {
-    rows = parse(content, { columns: true, skip_empty_lines: true, trim: true, relax_column_count: true }) as Record<string, string>[];
+    rows = parse(content, {
+      columns: true, skip_empty_lines: true, trim: true, relax_column_count: true,
+    }) as Record<string, string>[];
   } catch (e) {
     result.errors.push(`CSV parse error: ${(e as Error).message}`);
     return result;
@@ -149,66 +180,94 @@ async function processFile(filePath: string): Promise<BhavcopyResult> {
   const newFmt  = isNewFormat(headers);
   const pool    = getPool('live');
 
-  for (const row of rows) {
-    try {
-      let updated = 0;
+  if (newFmt) {
+    // ── Collect all rows into arrays, then single UNNEST update ──────────────
+    const tokens: string[] = [], ltps: string[] = [], opens: string[] = [];
+    const highs: string[] = [],  lows: string[] = [],  closes: string[] = [];
+    const prevs: string[] = [],  chgs: string[] = [],  pcts: string[] = [];
+    const vols: string[] = [],   ois: string[] = [],   dts: string[] = [];
 
-      if (newFmt) {
-        // ── New format ──────────────────────────────────────────────────────
-        const token    = row['FinInstrmId']?.trim();
-        if (!token) { result.skipped++; continue; }
+    for (const row of rows) {
+      const token = row['FinInstrmId']?.trim();
+      if (!token) { result.skipped++; continue; }
 
-        const ltp      = p(row['LastPric']);
-        const open     = p(row['OpnPric']);
-        const high     = p(row['HghPric']);
-        const low      = p(row['LwPric']);
-        const close    = p(row['ClsPric']);
-        const prevClose= p(row['PrvsClsgPric']);
-        const vol      = pi(row['TtlTradgVol']);
-        const oi       = pi(row['OpnIntrst']);
-        const date     = parseDate(row['TradDt'] || row['BizDt']);
-        const netChg   = (ltp != null && prevClose != null) ? parseFloat((ltp - prevClose).toFixed(2)) : null;
-        const chgPct   = (netChg != null && prevClose != null && prevClose !== 0)
-          ? parseFloat(((netChg / prevClose) * 100).toFixed(4)) : null;
+      const ltp       = p(row['LastPric']);
+      const open      = p(row['OpnPric']);
+      const high      = p(row['HghPric']);
+      const low       = p(row['LwPric']);
+      const close     = p(row['ClsPric']);
+      const prev      = p(row['PrvsClsgPric']);
+      const vol       = pi(row['TtlTradgVol']);
+      const oi        = pi(row['OpnIntrst']);
+      const date      = parseDate(row['TradDt'] || row['BizDt']);
+      const netChg    = (ltp != null && prev != null) ? parseFloat((ltp - prev).toFixed(2)) : null;
+      const chgPct    = (netChg != null && prev != null && prev !== 0)
+        ? parseFloat(((netChg / prev) * 100).toFixed(4)) : null;
 
-        if (!result.date && date) result.date = date;
+      if (!result.date && date) result.date = date;
 
-        const res = await pool.query(UPDATE_BY_TOKEN_SQL, [
-          ltp, open, high, low, close, prevClose, netChg, chgPct, vol, oi, date, token,
+      tokens.push(token);
+      ltps.push(str(ltp));   opens.push(str(open));  highs.push(str(high));
+      lows.push(str(low));   closes.push(str(close)); prevs.push(str(prev));
+      chgs.push(str(netChg)); pcts.push(str(chgPct));
+      vols.push(str(vol));   ois.push(str(oi));       dts.push(date ?? '');
+    }
+
+    if (tokens.length > 0) {
+      try {
+        const res = await pool.query(BATCH_BY_TOKEN_SQL, [
+          tokens, ltps, opens, highs, lows, closes, prevs, chgs, pcts, vols, ois, dts,
         ]);
-        updated = res.rowCount ?? 0;
-
-      } else {
-        // ── Old format ──────────────────────────────────────────────────────
-        const symbol   = row['SYMBOL']?.trim();
-        const series   = (row['SERIES'] ?? 'EQ').trim();
-        if (!symbol) { result.skipped++; continue; }
-
-        const ltp      = p(row['LAST']  || row['CLOSE']);
-        const open     = p(row['OPEN']);
-        const high     = p(row['HIGH']);
-        const low      = p(row['LOW']);
-        const close    = p(row['CLOSE']);
-        const prevClose= p(row['PREVCLOSE']);
-        const vol      = pi(row['TOTTRDQTY']);
-        const date     = parseDate(row['TIMESTAMP'] || row['DATE1'] || row['TDATE']);
-        const netChg   = (ltp != null && prevClose != null) ? parseFloat((ltp - prevClose).toFixed(2)) : null;
-        const chgPct   = (netChg != null && prevClose != null && prevClose !== 0)
-          ? parseFloat(((netChg / prevClose) * 100).toFixed(4)) : null;
-
-        if (!result.date && date) result.date = date;
-
-        const res = await pool.query(UPDATE_BY_SYMBOL_SQL, [
-          ltp, open, high, low, close, prevClose, netChg, chgPct, vol, null, date, symbol, series,
-        ]);
-        updated = res.rowCount ?? 0;
+        result.loaded  = res.rowCount ?? 0;
+        result.skipped += tokens.length - result.loaded;
+      } catch (e) {
+        result.errors.push((e as Error).message);
       }
+    }
 
-      if (updated > 0) result.loaded++;
-      else result.skipped++;
+  } else {
+    // ── Old format: batch by symbol+series ────────────────────────────────────
+    const symbols: string[] = [], series: string[] = [], ltps: string[] = [];
+    const opens: string[] = [],  highs: string[] = [],  lows: string[] = [];
+    const closes: string[] = [], prevs: string[] = [],  chgs: string[] = [];
+    const pcts: string[] = [],   vols: string[] = [],   dts: string[] = [];
 
-    } catch (e) {
-      result.errors.push((e as Error).message);
+    for (const row of rows) {
+      const symbol = row['SYMBOL']?.trim();
+      const ser    = (row['SERIES'] ?? 'EQ').trim();
+      if (!symbol) { result.skipped++; continue; }
+
+      const ltp    = p(row['LAST']  || row['CLOSE']);
+      const open   = p(row['OPEN']);
+      const high   = p(row['HIGH']);
+      const low    = p(row['LOW']);
+      const close  = p(row['CLOSE']);
+      const prev   = p(row['PREVCLOSE']);
+      const vol    = pi(row['TOTTRDQTY']);
+      const date   = parseDate(row['TIMESTAMP'] || row['DATE1'] || row['TDATE']);
+      const netChg = (ltp != null && prev != null) ? parseFloat((ltp - prev).toFixed(2)) : null;
+      const chgPct = (netChg != null && prev != null && prev !== 0)
+        ? parseFloat(((netChg / prev) * 100).toFixed(4)) : null;
+
+      if (!result.date && date) result.date = date;
+
+      symbols.push(symbol);  series.push(ser);
+      ltps.push(str(ltp));   opens.push(str(open));   highs.push(str(high));
+      lows.push(str(low));   closes.push(str(close));  prevs.push(str(prev));
+      chgs.push(str(netChg)); pcts.push(str(chgPct));
+      vols.push(str(vol));   dts.push(date ?? '');
+    }
+
+    if (symbols.length > 0) {
+      try {
+        const res = await pool.query(BATCH_BY_SYMBOL_SQL, [
+          symbols, series, ltps, opens, highs, lows, closes, prevs, chgs, pcts, vols, dts,
+        ]);
+        result.loaded  = res.rowCount ?? 0;
+        result.skipped += symbols.length - result.loaded;
+      } catch (e) {
+        result.errors.push((e as Error).message);
+      }
     }
   }
 
@@ -220,7 +279,6 @@ async function processFile(filePath: string): Promise<BhavcopyResult> {
 export async function loadBhavcopy(): Promise<BhavcopyStats> {
   const dir = path.join(process.cwd(), 'Bhavcopy');
 
-  // Ensure price columns exist (no-op after first call)
   await ensureColumns().catch(() => {});
 
   if (!fs.existsSync(dir)) {
@@ -232,7 +290,11 @@ export async function loadBhavcopy(): Promise<BhavcopyStats> {
     return { files: 0, totalLoaded: 0, totalSkipped: 0, results: [] };
   }
 
-  const results = await Promise.all(files.map(f => processFile(path.join(dir, f))));
+  // Process files sequentially — avoids OOM on large NSE FO files
+  const results: BhavcopyResult[] = [];
+  for (const f of files) {
+    results.push(await processFile(path.join(dir, f)));
+  }
 
   return {
     files:        files.length,
