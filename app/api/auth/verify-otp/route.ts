@@ -68,7 +68,9 @@ export async function POST(req: NextRequest) {
     });
     res.cookies.set(SESSION_COOKIE, sessionId, {
       httpOnly: true,
-      secure:   process.env.NODE_ENV === 'production',
+      // Use COOKIE_SECURE=true only when serving over HTTPS.
+      // Leaving it false (default) lets HTTP deployments work without SSL.
+      secure:   process.env.COOKIE_SECURE === 'true',
       sameSite: 'lax',
       maxAge:   SESSION_TTL_SECONDS,
       path:     '/',
