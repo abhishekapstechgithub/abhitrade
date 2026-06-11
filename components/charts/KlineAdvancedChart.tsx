@@ -2,7 +2,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import {
   init as klineInit, dispose as klineDispose, registerIndicator,
-  CandleType, OverlayMode,
+  CandleType, OverlayMode, IndicatorSeries,
   type Chart as KChart,
 } from 'klinecharts';
 import {
@@ -148,7 +148,7 @@ function registerCustomIndicator(name: string, label: string, formula: string, p
     registerIndicator({
       name,
       shortName: label.substring(0, 12),
-      series: pane === 'osc' ? 'normal' : 'price',
+      series: pane === 'osc' ? IndicatorSeries.Normal : IndicatorSeries.Price,
       figures: [{ key: 'value', title: `${label}: `, type: 'line' }],
       calcParams: [],
       calc: (dataList) => {
@@ -425,6 +425,7 @@ export function KlineAdvancedChart({ symbol, exchange, token, name, theme='light
   useEffect(()=>{
     if(!chartRef.current) return;
     const chart = klineInit(chartRef.current, { styles: buildStyles(isDark) as never });
+    if (!chart) return;
     kChart.current = chart;
 
     // Default: EMA on main, VOL on new pane
