@@ -22,8 +22,8 @@
  *   InstrmTp/FinInstrmNm → instrument_type
  */
 
-import { parse } from 'csv-parse/sync';
-import { readFile }  from 'fs/promises';
+import { createReadStream } from 'fs';
+import { parse as createParser } from 'csv-parse';
 import { getPool }   from './db/client';
 import { upsertInstrumentsBatch, type SecurityMasterRow } from './db/repositories';
 import { redis, KEYS } from './redis-client';
@@ -147,30 +147,10 @@ export async function loadFileIntoMongo(
   const segment  = fileType.endsWith('_CM') ? 'CM' : 'FO';
   const exchange = fileType.startsWith('NSE') ? 'NSE' : 'BSE';
 
-  await setJob(jobId, { status: 'parsing', progress: 5, filename, fileType, segment, exchange });
+  await setJob(jobId, { status: 'parsing', progress: 2, filename, fileType, segment, exchange });
 
-  // ── Parse CSV ──────────────────────────────────────────────────────────────
-  const content = await readFile(filePath);
-  let rawRows: Record<string, string>[];
-  try {
-    rawRows = parse(content, {
-      columns: true, skip_empty_lines: true, trim: true,
-      relax_column_count: true, bom: true,
-    }) as Record<string, string>[];
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    await setJob(jobId, { status: 'error', error: `CSV parse error: ${msg}` });
-    throw e;
-  }
-
-  const total = rawRows.length;
-  if (!total) {
-    await setJob(jobId, { status: 'error', error: 'File is empty' });
-    throw new Error('EMPTY_FILE');
-  }
-
-  // ── Wipe existing rows for this exchange + segment ─────────────────────────
-  await setJob(jobId, { status: 'wiping', progress: 8, totalRows: total });
+  // ── Wipe existing rows for this exchange + segment FIRST ──────────────────
+  await setJob(jobId, { status: 'wiping', progress: 5 });
   const pool = getPool('live');
   const wipeRes = await pool.query(
     'DELETE FROM security_master WHERE exchange = $1 AND segment = $2',
@@ -179,38 +159,74 @@ export async function loadFileIntoMongo(
   const wiped = wipeRes.rowCount ?? 0;
   console.log(`[pg-loader] Wiped ${wiped} rows (exchange=${exchange}, segment=${segment})`);
 
-  await setJob(jobId, { status: 'loading', progress: 12, wiped });
-
   // ── Invalidate Redis search cache for this exchange ───────────────────────
-  // Pattern: tk:q:{exchange}:* — delete all cached searches for this exchange
   try {
     const cacheKeys = await redis.keys(`tk:q:${exchange}:*`);
     if (cacheKeys.length) await redis.del(...cacheKeys);
   } catch { /* non-fatal */ }
 
-  // ── Map + insert in chunks ─────────────────────────────────────────────────
-  let inserted = 0;
-  let failed   = 0;
-  let processed = 0;
+  await setJob(jobId, { status: 'loading', progress: 8, wiped });
 
-  for (let i = 0; i < rawRows.length; i += CHUNK) {
-    const chunk = rawRows.slice(i, i + CHUNK);
-    const pgRows: SecurityMasterRow[] = [];
-    for (const row of chunk) {
+  // ── Stream-parse CSV + insert in batches ──────────────────────────────────
+  // Use streaming so the entire file is never held in memory at once.
+  let inserted  = 0;
+  let failed    = 0;
+  let total     = 0;
+  let batch: SecurityMasterRow[] = [];
+  let lastProgressUpdate = Date.now();
+
+  const parser = createReadStream(filePath).pipe(
+    createParser({
+      columns: true, skip_empty_lines: true, trim: true,
+      relax_column_count: true, bom: true,
+    }),
+  );
+
+  try {
+    for await (const row of parser as AsyncIterable<Record<string, string>>) {
+      total++;
       const r = rowToPg(fileType, exchange, segment, row);
-      if (r) pgRows.push(r);
+      if (r) batch.push(r);
       else failed++;
+
+      if (batch.length >= CHUNK) {
+        try {
+          const written = await upsertInstrumentsBatch(batch);
+          inserted += written;
+        } catch (e) {
+          console.error('[pg-loader] batch error:', e);
+          failed += batch.length;
+        }
+        batch = [];
+
+        // Throttle Redis progress updates to every 2 s
+        if (Date.now() - lastProgressUpdate > 2000) {
+          const pct = Math.min(95, Math.round(8 + (inserted / Math.max(total, 1)) * 87));
+          await setJob(jobId, { progress: pct, loaded: inserted, totalRows: total });
+          lastProgressUpdate = Date.now();
+        }
+      }
     }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    await setJob(jobId, { status: 'error', error: `CSV parse error: ${msg}` });
+    throw e;
+  }
+
+  // ── Flush remaining batch ─────────────────────────────────────────────────
+  if (batch.length > 0) {
     try {
-      const written = await upsertInstrumentsBatch(pgRows);
+      const written = await upsertInstrumentsBatch(batch);
       inserted += written;
     } catch (e) {
-      console.error('[pg-loader] batch error:', e);
-      failed += pgRows.length;
+      console.error('[pg-loader] final batch error:', e);
+      failed += batch.length;
     }
-    processed += chunk.length;
-    const pct = Math.round(12 + (processed / total) * 86);
-    await setJob(jobId, { progress: pct, loaded: inserted });
+  }
+
+  if (!total) {
+    await setJob(jobId, { status: 'error', error: 'File is empty' });
+    throw new Error('EMPTY_FILE');
   }
 
   const durationMs = Date.now() - t0;
