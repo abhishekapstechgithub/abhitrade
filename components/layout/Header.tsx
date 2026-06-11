@@ -1,7 +1,7 @@
 'use client';
 import {
   Bell, ChevronDown, Search, BarChart2, FlaskConical, Zap,
-  Activity, PieChart, Star, ChevronRight,
+  Activity, PieChart, Star, ChevronRight, Sun, Moon, Monitor,
 } from 'lucide-react';
 import { useMarketStore } from '@/store/useMarketStore';
 import { useUIStore } from '@/store/useUIStore';
@@ -12,6 +12,7 @@ import { useAngelOneQuotes } from '@/hooks/useAngelOneData';
 import { formatNumber, formatPercent, cn } from '@/lib/utils/format';
 import Link from 'next/link';
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useTheme } from '@/components/theme/ThemeProvider';
 import { MarketIndex } from '@/types';
 import { MarketsMenu } from '@/components/markets/MarketsMenu';
 
@@ -64,6 +65,10 @@ export function Header() {
   const isLive = isConnected && mode === 'live';
   const getInitials  = useAuthStore(s => s.getInitials);
   const getFirstName = useAuthStore(s => s.getFirstName);
+  const { theme, setTheme } = useTheme();
+  const nextTheme = theme === 'dark' ? 'light' : theme === 'light' ? 'system' : 'dark';
+  const ThemeIcon  = theme === 'dark' ? Moon : theme === 'light' ? Sun : Monitor;
+  const themeLabel = theme === 'dark' ? 'Dark' : theme === 'light' ? 'Light' : 'System';
 
   // Zustand persist rehydrates from localStorage only on the client.
   // Without this guard the server renders 'AT' but the client renders the
@@ -282,6 +287,18 @@ export function Header() {
 
         {/* Right */}
         <div className="flex items-center gap-1 ml-auto shrink-0">
+
+          {/* Theme toggle */}
+          <button
+            onClick={() => setTheme(nextTheme)}
+            title={`Theme: ${themeLabel} — click to switch`}
+            className="p-1.5 rounded-md transition-colors"
+            style={{ color: 'var(--text-dim)' }}
+            onMouseEnter={e => (e.currentTarget.style.color = 'var(--text-accent)')}
+            onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-dim)')}>
+            <ThemeIcon size={15} />
+          </button>
+
           <button onClick={() => setNotificationsOpen(!notificationsOpen)}
             className="relative p-1.5 rounded-md transition-colors"
             style={{ color: notificationsOpen ? '#00d4ff' : 'var(--text-dim)', background: notificationsOpen ? 'rgba(0,212,255,0.08)' : undefined }}>
@@ -321,7 +338,15 @@ export function Header() {
 }
 
 // Indices that have weekly F&O expiries — show EXPIRY badge
-const EXPIRY_SYMBOLS = new Set(['NIFTY 50', 'BANKNIFTY', 'SENSEX', 'BANKEX', 'MIDCPNIFTY', 'FINNIFTY']);
+// Weekly expiry day per index: 0=Sun 1=Mon 2=Tue 3=Wed 4=Thu 5=Fri 6=Sat
+const EXPIRY_DAY: Record<string, number> = {
+  'NIFTY 50':   4, // Thursday
+  'BANKNIFTY':  3, // Wednesday
+  'SENSEX':     2, // Tuesday
+  'BANKEX':     1, // Monday
+  'MIDCPNIFTY': 1, // Monday
+  'FINNIFTY':   2, // Tuesday
+};
 
 const POPUP_STYLE: React.CSSProperties = {
   background: 'var(--bg-surface, #081020)',
@@ -342,7 +367,7 @@ function IndexChip({ symbol, ltp, change, changePercent, isLive: live }: {
   const color      = pos ? 'var(--accent-green)' : 'var(--accent-red)';
   const absChange  = hasData ? Math.abs(change!).toFixed(2) : '--';
   const absPct     = hasData ? Math.abs(changePercent!).toFixed(2) : '--';
-  const showExpiry = EXPIRY_SYMBOLS.has(symbol);
+  const showExpiry = EXPIRY_DAY[symbol] === new Date().getDay();
 
   return (
     <div ref={ref} className="relative"
