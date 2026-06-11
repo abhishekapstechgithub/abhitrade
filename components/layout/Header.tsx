@@ -115,15 +115,14 @@ export function Header() {
         {/* Index chips + dropdown trigger */}
         <div className="hidden md:flex items-center gap-1 relative" ref={indicesListRef}>
           {pinnedIndexObjects.map(idx => {
-            // In live mode: use Angel One data only — never fall back to mock prices.
-            // In paper mode: use the mock/simulated ticker values.
+            // Prefer live Angel One quotes; fall back to store data (bhavcopy EOD or cached).
             const liveEntry = isLive
               ? Object.entries(liveQuotes).find(([tok]) => TOKEN_LABELS[tok] === idx.symbol)
               : null;
             const hasReal = !!liveEntry;
-            const ltp = hasReal ? liveEntry![1].ltp : null;
-            const chg = hasReal ? liveEntry![1].change : null;
-            const pct = hasReal ? liveEntry![1].pct : null;
+            const ltp = hasReal ? liveEntry![1].ltp : (idx.ltp > 0 ? idx.ltp : null);
+            const chg = hasReal ? liveEntry![1].change : (idx.ltp > 0 ? idx.change : null);
+            const pct = hasReal ? liveEntry![1].pct   : (idx.ltp > 0 ? idx.changePercent : null);
             return (
               <IndexChip
                 key={idx.symbol}

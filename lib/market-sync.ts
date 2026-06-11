@@ -234,7 +234,7 @@ const IDX_SYMBOL_TO_BHAVCOPY: Record<string, string> = {
   'BANKNIFTY':        'Nifty Bank',
   'SENSEX':           'BSE SENSEX',
   'NIFTY IT':         'Nifty IT',
-  'NIFTY MIDCAP 100': 'NIFTY Midcap 100',
+  'NIFTY MIDCAP 100': 'NIFTY Midcap 100',  // maps to store symbol MIDCPNIFTY
 };
 
 export async function getIndexPrices(): Promise<Record<string, IndexPrice>> {

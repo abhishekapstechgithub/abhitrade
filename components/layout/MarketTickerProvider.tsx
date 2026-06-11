@@ -8,10 +8,10 @@ import type { IndexPrice } from '@/lib/market-sync';
 // Map server-side symbol names → store symbol names
 const IDX_SYMBOL_MAP: Record<string, string> = {
   'NIFTY':           'NIFTY 50',
-  'BANKNIFTY':       'NIFTY BANK',
+  'BANKNIFTY':       'BANKNIFTY',
   'SENSEX':          'SENSEX',
   'NIFTY IT':        'NIFTY IT',
-  'NIFTY MIDCAP 100':'NIFTY MIDCAP 100',
+  'NIFTY MIDCAP 100':'MIDCPNIFTY',
 };
 
 // AngelOne tokens for the five tracked indices
