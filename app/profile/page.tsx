@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { useTheme } from '@/components/theme/ThemeProvider';
 import { useAngelOneStore } from '@/store/useAngelOneStore';
 import { useUIStore } from '@/store/useUIStore';
+import { useAuthStore } from '@/store/useAuthStore';
 
 const SECTIONS = [
   { id:'personal',      label:'Personal Details',   icon:User },
@@ -22,6 +23,17 @@ const BLUE = '41,121,255'; const CYAN = '0,212,255';
 
 export default function ProfilePage() {
   const [active, setActive] = useState('personal');
+  const user        = useAuthStore(s => s.user);
+  const getInitials = useAuthStore(s => s.getInitials);
+  const clearUser   = useAuthStore(s => s.clearUser);
+
+  const initials = getInitials();
+  const clientId = user?.id ? `TK${user.id.slice(0, 7).toUpperCase()}` : 'TK-------';
+
+  function handleLogout() {
+    clearUser();
+    window.location.href = '/auth/login';
+  }
 
   return (
     <div className="max-w-[1200px] mx-auto px-4 py-4">
@@ -33,10 +45,10 @@ export default function ProfilePage() {
           {/* User card */}
           <div className="glass rounded-2xl p-4 text-center" style={{ borderColor:`rgba(${BLUE},0.2)` }}>
             <div className="w-14 h-14 rounded-full flex items-center justify-center text-xl font-bold text-white mx-auto mb-3"
-              style={{ background:'linear-gradient(135deg,#2979ff,#aa00ff)' }}>AY</div>
-            <div className="text-sm font-bold" style={{ color:'var(--text-bright)' }}>Abhishek Yadav</div>
-            <div className="text-[10px] mt-0.5" style={{ color:'var(--text-label)' }}>abhishekdevopstech@gmail.com</div>
-            <div className="text-[10px]" style={{ color:'var(--text-label)' }}>Client ID: TK1234567</div>
+              style={{ background:'linear-gradient(135deg,#2979ff,#aa00ff)' }}>{initials}</div>
+            <div className="text-sm font-bold" style={{ color:'var(--text-bright)' }}>{user?.name ?? '—'}</div>
+            <div className="text-[10px] mt-0.5" style={{ color:'var(--text-label)' }}>{user?.email ?? '—'}</div>
+            <div className="text-[10px]" style={{ color:'var(--text-label)' }}>Client ID: {clientId}</div>
             <div className="mt-2.5">
               <Badge variant="success" size="sm"><Check size={9} /> KYC Verified</Badge>
             </div>
@@ -68,7 +80,8 @@ export default function ProfilePage() {
               <BookOpen size={13} />
               <span className="flex-1 text-left font-medium">Show Getting Started Guide</span>
             </button>
-            <button className="w-full flex items-center gap-3 px-4 py-2.5 text-xs transition-colors hover:bg-red-900/10"
+            <button onClick={handleLogout}
+              className="w-full flex items-center gap-3 px-4 py-2.5 text-xs transition-colors hover:bg-red-900/10"
               style={{ color:'var(--accent-red)' }}>
               <LogOut size={13} />
               <span className="flex-1 text-left font-medium">Logout</span>
@@ -78,7 +91,7 @@ export default function ProfilePage() {
 
         {/* Content */}
         <div className="md:col-span-3">
-          {active === 'personal'      && <PersonalDetails />}
+          {active === 'personal'      && <PersonalDetails user={user} />}
           {active === 'kyc'           && <KYCDetails />}
           {active === 'bank'          && <BankDetails />}
           {active === 'security'      && <SecurityDetails />}
@@ -123,14 +136,20 @@ function Toggle({ enabled }: { enabled: boolean }) {
   );
 }
 
-function PersonalDetails() {
+function PersonalDetails({ user }: { user: { name: string; email: string; phone: string } | null }) {
+  const maskedPhone = user?.phone
+    ? user.phone.replace(/(\+?\d{2})(\d+)(\d{4})$/, (_, s, m, e) => `${s}${'•'.repeat(m.length)}${e}`)
+    : '+91 •••• •• ••••';
   return (
     <SectionCard title="Personal Details" action={<Button variant="outline" size="sm"><Edit size={12} /> Edit</Button>}>
       <div className="grid grid-cols-2 gap-2.5">
         {[
-          ['Full Name','Abhishek Yadav'],['Email','abhishekdevopstech@gmail.com'],
-          ['Mobile','+91 •••• •• 7890'],['PAN','ABCDE1234F'],
-          ['Date of Birth','01/01/1990'],['Account Type','Individual'],
+          ['Full Name',      user?.name  ?? '—'],
+          ['Email',          user?.email ?? '—'],
+          ['Mobile',         maskedPhone],
+          ['PAN',            'ABCDE1234F'],
+          ['Date of Birth',  '—'],
+          ['Account Type',   'Individual'],
         ].map(([l,v]) => <Field key={l} label={l} value={v} />)}
       </div>
       <div className="mt-4 pt-4" style={{ borderTop:'1px solid var(--panel-divider)' }}>
