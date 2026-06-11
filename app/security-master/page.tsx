@@ -2,7 +2,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Upload, File, CheckCircle, XCircle, RefreshCw,
-  Database, Clock, AlertCircle, TrendingUp, BarChart2,
+  Database, Clock, AlertCircle, TrendingUp, BarChart2, LineChart,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -94,6 +94,7 @@ function BhavcopyTab() {
   const [dragging, setDragging]     = useState(false);
   const [files, setFiles]           = useState<File[]>([]);
   const [loading, setLoading]       = useState(false);
+  const [serverLoading, setServerLoading] = useState(false);
   const [result, setResult]         = useState<BhavResult | null>(null);
   const [lastLoad, setLastLoad]     = useState<BhavResult | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -101,8 +102,8 @@ function BhavcopyTab() {
   // Fetch last load status on mount
   useEffect(() => {
     fetch('/api/bhavcopy')
-      .then(r => r.json())
-      .then((d: BhavResult) => { if (d.loadedAt) setLastLoad(d); })
+      .then(r => r.ok ? r.json() : null)
+      .then((d: BhavResult | null) => { if (d?.loadedAt) setLastLoad(d); })
       .catch(() => {});
   }, []);
 
@@ -124,7 +125,15 @@ function BhavcopyTab() {
     files.forEach(f => fd.append('file', f));
     try {
       const r = await fetch('/api/bhavcopy/upload', { method: 'POST', body: fd });
-      const d: BhavResult = await r.json();
+      let d: BhavResult;
+      try {
+        d = await r.json();
+      } catch {
+        d = { files: 0, totalLoaded: 0, totalSkipped: 0, error: `Server returned non-JSON response (status ${r.status}). Check if you are logged in.` };
+      }
+      if (!r.ok && !d.error) {
+        d = { ...d, error: `Upload failed with status ${r.status}` };
+      }
       setResult(d);
       if (!d.error) {
         setLastLoad(d);
@@ -134,6 +143,27 @@ function BhavcopyTab() {
       setResult({ files: 0, totalLoaded: 0, totalSkipped: 0, error: String(e) });
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleServerLoad() {
+    if (serverLoading) return;
+    setServerLoading(true);
+    setResult(null);
+    try {
+      const r = await fetch('/api/bhavcopy', { method: 'POST' });
+      let d: BhavResult;
+      try {
+        d = await r.json();
+      } catch {
+        d = { files: 0, totalLoaded: 0, totalSkipped: 0, error: `Server returned non-JSON (status ${r.status})` };
+      }
+      setResult(d);
+      if (!d.error) setLastLoad({ ...d, loadedAt: new Date().toISOString() });
+    } catch (e) {
+      setResult({ files: 0, totalLoaded: 0, totalSkipped: 0, error: String(e) });
+    } finally {
+      setServerLoading(false);
     }
   }
 
@@ -239,12 +269,21 @@ function BhavcopyTab() {
         <div className="mt-4 flex gap-2">
           <button
             onClick={handleUpload}
-            disabled={!files.length || loading}
+            disabled={!files.length || loading || serverLoading}
             className="flex-1 flex items-center justify-center gap-2 h-10 rounded-xl text-sm font-semibold text-white transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
             style={{ background: '#f97316' }}>
             {loading
               ? <><RefreshCw size={14} className="animate-spin" /> Loading prices…</>
               : <><Upload size={14} /> Upload &amp; Update Prices</>}
+          </button>
+          <button
+            onClick={handleServerLoad}
+            disabled={loading || serverLoading}
+            title="Load CSVs already in server's Bhavcopy/ folder"
+            className="flex items-center gap-2 px-4 h-10 rounded-xl text-sm font-semibold border border-orange-300 text-orange-700 hover:bg-orange-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all whitespace-nowrap">
+            {serverLoading
+              ? <><RefreshCw size={13} className="animate-spin" /> Loading…</>
+              : <><Database size={13} /> Load from Server</>}
           </button>
           {files.length > 0 && (
             <button
@@ -329,9 +368,276 @@ function BhavcopyTab() {
   );
 }
 
+// ─── Index Bhavcopy Tab ────────────────────────────────────────────────────────
+
+interface IdxResult {
+  files: number;
+  totalLoaded: number;
+  totalSkipped: number;
+  savedFiles?: string[];
+  loadedAt?: string | null;
+  results?: Array<{ file: string; loaded: number; skipped: number; errors: string[]; date: string | null; exchange: string }>;
+  error?: string;
+}
+
+function IndexBhavcopyTab() {
+  const [dragging, setDragging]   = useState(false);
+  const [files, setFiles]         = useState<File[]>([]);
+  const [loading, setLoading]     = useState(false);
+  const [serverLoading, setServerLoading] = useState(false);
+  const [result, setResult]       = useState<IdxResult | null>(null);
+  const [lastLoad, setLastLoad]   = useState<IdxResult | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    fetch('/api/index-bhavcopy')
+      .then(r => r.ok ? r.json() : null)
+      .then((d: IdxResult | null) => { if (d?.loadedAt) setLastLoad(d); })
+      .catch(() => {});
+  }, []);
+
+  function addFiles(incoming: FileList | null) {
+    if (!incoming) return;
+    const csvs = Array.from(incoming).filter(f => /\.csv$/i.test(f.name));
+    setFiles(prev => {
+      const names = new Set(prev.map(f => f.name));
+      return [...prev, ...csvs.filter(f => !names.has(f.name))];
+    });
+    setResult(null);
+  }
+
+  async function handleUpload() {
+    if (!files.length || loading) return;
+    setLoading(true); setResult(null);
+    const fd = new FormData();
+    files.forEach(f => fd.append('file', f));
+    try {
+      const r = await fetch('/api/index-bhavcopy/upload', { method: 'POST', body: fd });
+      let d: IdxResult;
+      try { d = await r.json(); }
+      catch { d = { files: 0, totalLoaded: 0, totalSkipped: 0, error: `Server returned non-JSON (status ${r.status})` }; }
+      setResult(d);
+      if (!d.error) { setLastLoad(d); setFiles([]); }
+    } catch (e) {
+      setResult({ files: 0, totalLoaded: 0, totalSkipped: 0, error: String(e) });
+    } finally { setLoading(false); }
+  }
+
+  async function handleServerLoad() {
+    if (serverLoading) return;
+    setServerLoading(true); setResult(null);
+    try {
+      const r = await fetch('/api/index-bhavcopy', { method: 'POST' });
+      let d: IdxResult;
+      try { d = await r.json(); }
+      catch { d = { files: 0, totalLoaded: 0, totalSkipped: 0, error: `Server returned non-JSON (status ${r.status})` }; }
+      setResult(d);
+      if (!d.error) setLastLoad({ ...d, loadedAt: new Date().toISOString() });
+    } catch (e) {
+      setResult({ files: 0, totalLoaded: 0, totalSkipped: 0, error: String(e) });
+    } finally { setServerLoading(false); }
+  }
+
+  const totalSize = files.reduce((s, f) => s + f.size, 0);
+  const anyLoading = loading || serverLoading;
+
+  return (
+    <div className="space-y-5">
+      {/* Last load status */}
+      {lastLoad && (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <LineChart size={14} className="text-teal-500" />
+            <span className="text-sm font-semibold text-gray-900">Last Index Load</span>
+            {lastLoad.loadedAt && (
+              <span className="ml-auto text-xs text-gray-400 flex items-center gap-1">
+                <Clock size={10} />
+                {new Date(lastLoad.loadedAt).toLocaleString('en-IN')}
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            {[
+              { label: 'Files Processed', val: lastLoad.files, color: 'text-blue-700' },
+              { label: 'Rows Inserted/Updated', val: lastLoad.totalLoaded, color: 'text-green-700 font-bold' },
+              { label: 'Rows Skipped', val: lastLoad.totalSkipped, color: 'text-gray-500' },
+            ].map(s => (
+              <div key={s.label} className="p-3 bg-gray-50 rounded-lg border border-gray-100 text-center">
+                <div className={`text-lg font-bold ${s.color}`}>{s.val.toLocaleString('en-IN')}</div>
+                <div className="text-[10px] text-gray-400 mt-0.5">{s.label}</div>
+              </div>
+            ))}
+          </div>
+          {lastLoad.results && lastLoad.results.length > 0 && (
+            <div className="mt-3 space-y-1">
+              {lastLoad.results.map(r => (
+                <div key={r.file} className="flex items-center justify-between text-xs px-3 py-1.5 bg-gray-50 rounded-lg border border-gray-100">
+                  <div className="flex items-center gap-2">
+                    <File size={11} className="text-gray-400" />
+                    <span className="font-mono text-gray-700 truncate max-w-[260px]">{r.file}</span>
+                    {r.exchange && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-teal-100 text-teal-700">{r.exchange}</span>}
+                    {r.date && <span className="text-gray-400">· {r.date}</span>}
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="text-green-700 font-semibold">{r.loaded.toLocaleString('en-IN')} rows</span>
+                    <span className="text-gray-400">{r.skipped.toLocaleString('en-IN')} skipped</span>
+                    {r.errors.length > 0 && <span className="text-red-500">{r.errors.length} err</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Upload card */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="w-6 h-6 rounded-full bg-teal-500 text-white text-xs font-bold flex items-center justify-center shrink-0">1</span>
+          <span className="text-sm font-semibold text-gray-900">Select Index Bhavcopy CSV File(s)</span>
+        </div>
+        <p className="text-xs text-gray-400 ml-8 mb-4">
+          NSE (<code className="bg-gray-100 px-1 rounded">ind_close_all_*.csv</code>) or BSE (<code className="bg-gray-100 px-1 rounded">INDEXSummary_*.csv</code>) index EOD files.
+          Stored in <code className="bg-gray-100 px-1 rounded">index_prices</code> table, matched by index name.
+        </p>
+
+        <div
+          onDragOver={e => { e.preventDefault(); setDragging(true); }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
+          onClick={() => inputRef.current?.click()}
+          className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors ${
+            dragging ? 'border-teal-400 bg-teal-50' : 'border-gray-200 hover:border-teal-300 hover:bg-teal-50/40'
+          }`}>
+          <input ref={inputRef} type="file" accept=".csv" multiple className="hidden"
+            onChange={e => addFiles(e.target.files)} />
+          <LineChart size={28} className={`mx-auto mb-3 ${dragging ? 'text-teal-400' : 'text-gray-300'}`} />
+          {files.length > 0 ? (
+            <div className="space-y-1">
+              {files.map(f => (
+                <div key={f.name} className="flex items-center justify-center gap-2">
+                  <File size={13} className="text-teal-500" />
+                  <span className="text-sm font-semibold text-gray-800">{f.name}</span>
+                  <span className="text-xs text-gray-400">{fmtBytes(f.size)}</span>
+                </div>
+              ))}
+              {files.length > 1 && (
+                <div className="text-xs text-gray-400 mt-1">{files.length} files · {fmtBytes(totalSize)} total</div>
+              )}
+            </div>
+          ) : (
+            <>
+              <p className="text-sm font-medium text-gray-600">Drop index CSV file(s) here or click to browse</p>
+              <p className="text-xs text-gray-400 mt-1">NSE ind_close_all · BSE INDEXSummary · .csv</p>
+            </>
+          )}
+        </div>
+
+        <div className="mt-4 flex gap-2">
+          <button
+            onClick={handleUpload}
+            disabled={!files.length || anyLoading}
+            className="flex-1 flex items-center justify-center gap-2 h-10 rounded-xl text-sm font-semibold text-white transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ background: '#0d9488' }}>
+            {loading
+              ? <><RefreshCw size={14} className="animate-spin" /> Uploading…</>
+              : <><Upload size={14} /> Upload &amp; Load Index Prices</>}
+          </button>
+          <button
+            onClick={handleServerLoad}
+            disabled={anyLoading}
+            title="Load CSVs already in server's index/ folder"
+            className="flex items-center gap-2 px-4 h-10 rounded-xl text-sm font-semibold border border-teal-300 text-teal-700 hover:bg-teal-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all whitespace-nowrap">
+            {serverLoading
+              ? <><RefreshCw size={13} className="animate-spin" /> Loading…</>
+              : <><Database size={13} /> Load from Server</>}
+          </button>
+          {files.length > 0 && (
+            <button
+              onClick={() => { setFiles([]); setResult(null); }}
+              className="px-4 h-10 rounded-xl text-sm font-medium border border-gray-200 hover:bg-gray-50 text-gray-600">
+              Clear
+            </button>
+          )}
+        </div>
+
+        {result && !result.error && (
+          <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-xl">
+            <div className="flex items-center gap-2 mb-3">
+              <CheckCircle size={14} className="text-green-600" />
+              <span className="text-sm font-semibold text-green-700">Index prices loaded successfully</span>
+            </div>
+            <div className="grid grid-cols-3 gap-3 text-center">
+              {[
+                { label: 'Files',        val: result.files,        c: 'text-blue-700' },
+                { label: 'Rows Loaded',  val: result.totalLoaded,  c: 'text-green-700 font-bold' },
+                { label: 'Rows Skipped', val: result.totalSkipped, c: 'text-gray-500' },
+              ].map(s => (
+                <div key={s.label} className="p-2 bg-white rounded-lg border border-green-100">
+                  <div className={`text-sm font-bold ${s.c}`}>{s.val.toLocaleString('en-IN')}</div>
+                  <div className="text-[10px] text-gray-400">{s.label}</div>
+                </div>
+              ))}
+            </div>
+            {result.results && result.results.map(r => (
+              <div key={r.file} className="mt-2 flex items-center justify-between text-xs px-3 py-2 bg-white rounded-lg border border-green-100">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-gray-700 truncate">{r.file}</span>
+                  {r.exchange && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-teal-100 text-teal-700">{r.exchange}</span>}
+                  {r.date && <span className="text-gray-400">· {r.date}</span>}
+                </div>
+                <div className="flex gap-3 shrink-0">
+                  <span className="text-green-700 font-semibold">{r.loaded.toLocaleString('en-IN')} rows</span>
+                  {r.errors.length > 0 && (
+                    <span className="text-red-500" title={r.errors.slice(0,3).join('\n')}>{r.errors.length} errors</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {result?.error && (
+          <div className="mt-4 flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-xl">
+            <AlertCircle size={14} className="text-red-500 shrink-0 mt-0.5" />
+            <span className="text-sm text-red-700">{result.error}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Format reference */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+        <h3 className="text-sm font-semibold text-gray-900 mb-3">Supported Index Bhavcopy Formats</h3>
+        <div className="space-y-3 text-xs text-gray-600">
+          <div className="p-3 bg-teal-50 rounded-lg border border-teal-100">
+            <div className="font-semibold text-teal-800 mb-1">NSE — ind_close_all_DDMMYYYY.csv</div>
+            <div className="font-mono text-[10px] text-teal-700 leading-relaxed">
+              <strong>Index Name</strong>, <strong>Index Date</strong>, Open Index Value, High Index Value,
+              Low Index Value, <strong>Closing Index Value</strong>, Points Change, Change(%),
+              Volume, Turnover (Rs. Cr.), P/E, P/B, Div Yield
+            </div>
+            <div className="mt-1 text-teal-600">Date from <code className="bg-teal-100 px-1 rounded">Index Date</code> column · exchange = NSE</div>
+          </div>
+          <div className="p-3 bg-indigo-50 rounded-lg border border-indigo-100">
+            <div className="font-semibold text-indigo-800 mb-1">BSE — INDEXSummary_DDMMYYYY.csv</div>
+            <div className="font-mono text-[10px] text-indigo-700 leading-relaxed">
+              IndexCode, <strong>IndexID</strong>, <strong>IndexName</strong>, PreviousClose,
+              <strong>OpenPrice, HighPrice, LowPrice, ClosePrice</strong>, 52weeksHigh, 52weeksLow
+            </div>
+            <div className="mt-1 text-indigo-600">Date from filename (DDMMYYYY) · exchange = BSE</div>
+          </div>
+          <div className="text-gray-500 text-[11px] mt-2">
+            Stored in: <code className="bg-gray-100 px-1 rounded">index_prices</code> table · upserted by (symbol, price_date)
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default function SecurityMasterPage() {
-  const [activeTab, setActiveTab]     = useState<'security-master' | 'bhavcopy'>('security-master');
+  const [activeTab, setActiveTab]     = useState<'security-master' | 'bhavcopy' | 'index'>('security-master');
   const [fileType, setFileType]       = useState<FileType | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [overwrite, setOverwrite]     = useState(false);
@@ -443,8 +749,9 @@ export default function SecurityMasterPage() {
         {/* Tabs */}
         <div className="flex gap-1 p-1 bg-white rounded-xl border border-gray-200 shadow-sm w-fit">
           {[
-            { id: 'security-master' as const, label: 'Security Master', icon: <Database size={13} /> },
-            { id: 'bhavcopy'        as const, label: 'Bhavcopy EOD Prices', icon: <TrendingUp size={13} /> },
+            { id: 'security-master' as const, label: 'Security Master',     icon: <Database    size={13} /> },
+            { id: 'bhavcopy'        as const, label: 'Bhavcopy EOD Prices', icon: <TrendingUp  size={13} /> },
+            { id: 'index'           as const, label: 'Index Prices',        icon: <LineChart   size={13} /> },
           ].map(tab => (
             <button key={tab.id} onClick={() => setActiveTab(tab.id)}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
@@ -460,6 +767,9 @@ export default function SecurityMasterPage() {
 
         {/* Bhavcopy Tab */}
         {activeTab === 'bhavcopy' && <BhavcopyTab />}
+
+        {/* Index Prices Tab */}
+        {activeTab === 'index' && <IndexBhavcopyTab />}
 
         {/* Security Master Tab */}
         {activeTab === 'security-master' && <>

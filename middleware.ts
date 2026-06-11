@@ -18,6 +18,8 @@ const PUBLIC_PATHS = [
   '/api/market-data',
   '/api/gainers-losers',
   '/api/index-prices',
+  '/api/bhavcopy',
+  '/api/index-bhavcopy',
   '/_next',
   '/favicon.ico',
 ];
