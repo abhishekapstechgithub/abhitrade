@@ -121,9 +121,9 @@ export function Header() {
               ? Object.entries(liveQuotes).find(([tok]) => TOKEN_LABELS[tok] === idx.symbol)
               : null;
             const hasReal = !!liveEntry;
-            const ltp = hasReal ? liveEntry![1].ltp : (isLive ? null : idx.ltp);
-            const chg = hasReal ? liveEntry![1].change : (isLive ? null : idx.change);
-            const pct = hasReal ? liveEntry![1].pct : (isLive ? null : idx.changePercent);
+            const ltp = hasReal ? liveEntry![1].ltp : null;
+            const chg = hasReal ? liveEntry![1].change : null;
+            const pct = hasReal ? liveEntry![1].pct : null;
             return (
               <IndexChip
                 key={idx.symbol}
@@ -174,9 +174,9 @@ export function Header() {
                     ? Object.entries(liveQuotes).find(([tok]) => TOKEN_LABELS[tok] === idx.symbol)
                     : null;
                   const hasReal  = !!liveEntry;
-                  const rowLtp   = hasReal ? liveEntry![1].ltp   : (isLive ? null : idx.ltp);
-                  const rowChg   = hasReal ? liveEntry![1].change : (isLive ? null : idx.change);
-                  const rowPct   = hasReal ? liveEntry![1].pct   : (isLive ? null : idx.changePercent);
+                  const rowLtp   = hasReal ? liveEntry![1].ltp    : null;
+                  const rowChg   = hasReal ? liveEntry![1].change : null;
+                  const rowPct   = hasReal ? liveEntry![1].pct    : null;
                   const pos      = rowChg !== null ? rowChg >= 0 : true;
                   const canPin   = pinned || !atPinnedLimit;
                   return (

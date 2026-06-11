@@ -6,7 +6,6 @@ import { useUIStore } from '@/store/useUIStore';
 import { useChartStore } from '@/store/useChartStore';
 import { lookupToken } from '@/lib/angelone/tokens';
 import { formatCurrency, formatNumber, formatPercent } from '@/lib/utils/format';
-import { mockPortfolio } from '@/lib/mock-data/portfolio';
 import { WatchlistItem } from '@/types';
 import { PaperPosition } from '@/store/usePaperTradingStore';
 import Link from 'next/link';
@@ -171,33 +170,32 @@ function PnlCard({ onBuy, paperActive, paperData }: { onBuy: () => void; paperAc
     );
   }
 
-  // Default portfolio view
-  const p = mockPortfolio;
-  const pos = p.todayPnl >= 0;
+  // Live portfolio — data comes from broker integration (Angel One)
   return (
     <div className="glass-bright rounded-2xl p-4 relative overflow-hidden"
-      style={{ borderColor: gainBg(pos, 0.3), boxShadow: `0 0 28px ${gainBg(pos, 0.08)}` }}>
-      <div className="absolute inset-0 pointer-events-none"
-        style={{ background: `radial-gradient(ellipse at top right,${gainBg(pos, 0.1)},transparent 60%)` }} />
+      style={{ borderColor: 'var(--card-inner-border)' }}>
       <div className="relative flex flex-col gap-2">
         <div className="flex items-center justify-between">
           <span className="text-[11px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-label)' }}>
-            Today&#39;s P&amp;L
+            Portfolio
           </span>
           <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
-            style={{ background: gainBg(pos, 0.18), color: gainColor(pos), border: `1px solid ${gainBg(pos, 0.35)}` }}>
-            {pos ? '▲ PROFIT' : '▼ LOSS'}
+            style={{ background: 'rgba(41,121,255,0.12)', color: '#2979ff', border: '1px solid rgba(41,121,255,0.25)' }}>
+            LIVE
           </span>
         </div>
-        <div>
-          <div className="text-2xl font-bold font-mono" style={{ color: gainColor(pos) }}>
-            {pos ? '+' : ''}{formatCurrency(p.todayPnl, true)}
-          </div>
-          <div className="text-[10px]" style={{ color: 'var(--text-label)' }}>{formatPercent(p.overallReturn)} overall return</div>
+        <div className="flex items-center justify-center py-6 flex-col gap-2">
+          <Wallet size={28} style={{ color: 'var(--text-dim)' }} />
+          <span className="text-xs" style={{ color: 'var(--text-label)' }}>Connect Angel One to view portfolio</span>
+          <Link href="/profile">
+            <button className="mt-1 px-4 h-7 rounded-lg text-xs font-semibold transition-colors"
+              style={{ background: 'rgba(41,121,255,0.12)', color: '#2979ff', border: '1px solid rgba(41,121,255,0.25)' }}>
+              Connect broker
+            </button>
+          </Link>
         </div>
         <div className="grid grid-cols-2 gap-1.5">
-          {[['Invested', formatCurrency(p.totalInvested, true)], ['Current', formatCurrency(p.currentValue, true)],
-            ['Cash', formatCurrency(p.availableCash, true)], ['Margin', formatCurrency(p.marginUsed, true)]].map(([l, v]) => (
+          {[['Invested', '—'], ['Current', '—'], ['Cash', '—'], ['Margin', '—']].map(([l, v]) => (
             <div key={l} className="rounded-lg px-2 py-1.5"
               style={{ background: 'var(--card-inner-bg)', border: '1px solid var(--card-inner-border)' }}>
               <div className="text-[11px] uppercase tracking-wider" style={{ color: 'var(--text-label)' }}>{l}</div>
@@ -346,11 +344,24 @@ function WatchlistPanel({ items, onOrder }: { items: WatchlistItem[]; onOrder: (
   return (
     <div className="glass rounded-2xl overflow-hidden" style={{ maxHeight: 360 }}>
       <PanelHeader title="Watchlist" icon={<Eye size={12} style={{ color: C(CYAN) }} />} href="/watchlist" />
-      <div className="overflow-y-auto no-scrollbar">
-        {items.slice(0, 10).map(item => (
-          <WatchlistRow key={item.id} item={item} dir={priceDirections[item.symbol]} onOrder={onOrder} />
-        ))}
-      </div>
+      {items.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-10 gap-2">
+          <Eye size={24} style={{ color: 'var(--text-dim)' }} />
+          <span className="text-xs" style={{ color: 'var(--text-label)' }}>No scrips in watchlist</span>
+          <Link href="/watchlist">
+            <button className="mt-1 px-4 h-7 rounded-lg text-xs font-semibold"
+              style={{ background: `rgba(${CYAN},0.1)`, color: `rgb(${CYAN})`, border: `1px solid rgba(${CYAN},0.25)` }}>
+              Add scrips →
+            </button>
+          </Link>
+        </div>
+      ) : (
+        <div className="overflow-y-auto no-scrollbar">
+          {items.slice(0, 10).map(item => (
+            <WatchlistRow key={item.id} item={item} dir={priceDirections[item.symbol]} onOrder={onOrder} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -639,37 +650,11 @@ function HoldingsTable({ paperActive, paperPositions }: { paperActive: boolean; 
             </tr>
           </thead>
           <tbody>
-            {mockPortfolio.holdings.slice(0, 6).map(h => {
-              const pos = h.pnl >= 0;
-              return (
-                <tr key={h.id} className="transition-colors cursor-pointer"
-                  style={{ borderBottom: '1px solid var(--row-border)' }}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--row-hover-bg)')}
-                  onMouseLeave={e => (e.currentTarget.style.background = '')}>
-                  <td className="px-3 py-2.5">
-                    <div className="font-bold text-xs" style={{ color: 'var(--text-secondary)' }}>{h.symbol}</div>
-                    <div className="text-[10px]" style={{ color: 'var(--text-label)' }}>{h.exchange}</div>
-                  </td>
-                  <td className="px-3 py-2.5 font-mono text-xs" style={{ color: 'var(--text-accent)' }}>{h.quantity}</td>
-                  <td className="px-3 py-2.5 font-mono text-xs" style={{ color: 'var(--text-dim)' }}>₹{formatNumber(h.avgPrice)}</td>
-                  <td className="px-3 py-2.5 font-mono font-bold text-xs" style={{ color: 'var(--text-bright)' }}>₹{formatNumber(h.ltp)}</td>
-                  <td className="px-3 py-2.5 font-mono text-xs" style={{ color: 'var(--text-accent)' }}>{formatCurrency(h.currentValue, true)}</td>
-                  <td className="px-3 py-2.5 font-mono font-bold text-xs" style={{ color: gainColor(pos) }}>
-                    {pos ? '+' : '-'}₹{formatNumber(Math.abs(h.pnl))}
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold"
-                      style={{
-                        background: gainBg(pos, 0.14),
-                        color: gainColor(pos),
-                        border: `1px solid ${gainBg(pos, 0.3)}`,
-                      }}>
-                      {formatPercent(h.pnlPercent)}
-                    </span>
-                  </td>
-                </tr>
-              );
-            })}
+            <tr>
+              <td colSpan={7} className="px-3 py-8 text-center text-xs" style={{ color: 'var(--text-label)' }}>
+                No holdings — connect Angel One or start paper trading
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>

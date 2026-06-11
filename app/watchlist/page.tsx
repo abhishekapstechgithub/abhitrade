@@ -10,11 +10,29 @@ import {
   Filter, Columns, ChevronsUpDown,
 } from 'lucide-react';
 import { useUIStore } from '@/store/useUIStore';
-import { useRealScrips } from '@/lib/hooks/useRealScrips';
-import { watchlistItems, optionChainData } from '@/lib/mock-data/market';
 import { lookupToken } from '@/lib/angelone/tokens';
 import { formatNumber, formatPercent, formatVolume } from '@/lib/utils/format';
-import type { WatchlistItem } from '@/types';
+import type { WatchlistItem, OptionContract } from '@/types';
+
+const STORAGE_KEY = 'tk:watchlists';
+
+function loadFromStorage(wlName: string): WatchlistItem[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const all = JSON.parse(raw) as Record<string, WatchlistItem[]>;
+    return Array.isArray(all[wlName]) ? all[wlName] : [];
+  } catch { return []; }
+}
+
+function saveToStorage(wlName: string, items: WatchlistItem[]) {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    const all = raw ? JSON.parse(raw) as Record<string, WatchlistItem[]> : {};
+    all[wlName] = items;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+  } catch { /* ignore */ }
+}
 
 // Dynamic import — no SSR for the advanced chart (DOM-only)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -467,11 +485,10 @@ function LeftPanel({
     i.name.toLowerCase().includes(search.toLowerCase())
   );
 
-  const strikes   = Array.from(new Set(optionChainData.map(o => o.strike))).sort((a, b) => a - b);
-  const calls     = new Map(optionChainData.filter(o => o.optionType === 'CE').map(o => [o.strike, o]));
-  const puts      = new Map(optionChainData.filter(o => o.optionType === 'PE').map(o => [o.strike, o]));
-  const atmStrike = strikes.reduce((best, s) =>
-    Math.abs(s - ATM_PRICE) < Math.abs(best - ATM_PRICE) ? s : best, strikes[0]);
+  const strikes: number[] = [];
+  const calls = new Map<number, OptionContract>();
+  const puts  = new Map<number, OptionContract>();
+  const atmStrike: number | undefined = undefined;
 
   return (
     <div className="flex flex-col h-full"
@@ -715,11 +732,10 @@ interface OcOverlayProps {
 function OcOverlay({ ocSymbol, setOcSymbol, ocExpiry, setOcExpiry, onClose, onDock }: OcOverlayProps) {
   const { openOrderPanel } = useUIStore();
 
-  const strikes   = Array.from(new Set(optionChainData.map(o => o.strike))).sort((a, b) => a - b);
-  const calls     = new Map(optionChainData.filter(o => o.optionType === 'CE').map(o => [o.strike, o]));
-  const puts      = new Map(optionChainData.filter(o => o.optionType === 'PE').map(o => [o.strike, o]));
-  const atmStrike = strikes.reduce((best, s) =>
-    Math.abs(s - ATM_PRICE) < Math.abs(best - ATM_PRICE) ? s : best, strikes[0]);
+  const strikes: number[] = [];
+  const calls = new Map<number, OptionContract>();
+  const puts  = new Map<number, OptionContract>();
+  const atmStrike: number | undefined = undefined;
 
   return (
     <div className="absolute inset-4 rounded-2xl z-40 flex flex-col overflow-hidden shadow-2xl"
@@ -1259,12 +1275,21 @@ function ChartMode({ items, activeWL, setActiveWL }: ChartModeProps) {
 // ─── PAGE ROOT ────────────────────────────────────────────────────────────────
 
 export default function WatchlistPage() {
-  const { items: baseItems, loading } = useRealScrips();
-  const [items, setItems]             = useState<WatchlistItem[]>(watchlistItems);
-  const [activeWL, setActiveWL]       = useState(0);
-  const [viewMode, setViewMode]       = useState<'chart' | 'table'>('chart');
+  const [items, setItems]   = useState<WatchlistItem[]>([]);
+  const [activeWL, setActiveWL] = useState(0);
+  const [viewMode, setViewMode] = useState<'chart' | 'table'>('chart');
 
-  useEffect(() => { if (!loading) setItems(baseItems); }, [loading, baseItems]);
+  const wlName = WATCHLIST_NAMES[activeWL] ?? 'Watchlist1';
+
+  // Load from localStorage on mount and when switching tabs
+  useEffect(() => {
+    setItems(loadFromStorage(wlName));
+  }, [wlName]);
+
+  // Persist to localStorage whenever items change
+  useEffect(() => {
+    saveToStorage(wlName, items);
+  }, [items, wlName]);
 
   return (
     <div style={{
@@ -1276,13 +1301,7 @@ export default function WatchlistPage() {
       <div className="flex items-center justify-end gap-2 px-3 py-1.5 shrink-0"
         style={{ borderBottom: '1px solid var(--panel-divider)', background: 'var(--panel-bg)' }}>
         <span className="text-[11px] mr-auto" style={{ color: 'var(--text-label)' }}>
-          {loading
-            ? (
-              <span className="flex items-center gap-1">
-                <RefreshCw size={10} className="animate-spin" /> Loading instruments…
-              </span>
-            )
-            : `${items.length} instruments`}
+          {items.length > 0 ? `${items.length} instruments` : 'Search to add scrips'}
         </span>
         <button title="Chart mode" onClick={() => setViewMode('chart')}
           className="p-1.5 rounded-lg transition-all"

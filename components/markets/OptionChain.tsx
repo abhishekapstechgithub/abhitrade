@@ -1,7 +1,8 @@
 'use client';
 import { useState } from 'react';
 import { Search, Plus, Minus } from 'lucide-react';
-import { optionChainData } from '@/lib/mock-data/market';
+import type { OptionContract } from '@/types';
+const optionChainData: OptionContract[] = [];
 import { useUIStore } from '@/store/useUIStore';
 
 const EXPIRIES = ['26 Jun 2026', '03 Jul 2026', '31 Jul 2026', '28 Aug 2026', '25 Sep 2026'];

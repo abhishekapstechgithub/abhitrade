@@ -4,25 +4,13 @@ import { redis, isRedisAvailable } from '@/lib/redis-client';
 import { searchInstrumentsPg } from '@/lib/db/repositories';
 import { isDbAvailable } from '@/lib/db/client';
 
-const CACHE_TTL = 3600; // 1 hour
+const CACHE_TTL = 3600;
 
 // Redis cache key for a search query
 function cacheKey(q: string, exchange = 'all', type = 'all') {
   return `tk:q:${exchange.toUpperCase()}:${type.toUpperCase()}:${q.toUpperCase().trim()}`;
 }
 
-// Fallback mock when no backend is available
-const MOCK_INSTRUMENTS = [
-  { token: '1',  symbol: 'RELIANCE',  tradingSymbol: 'RELIANCE',  name: 'Reliance Industries Ltd',   exchange: 'NSE', instrumentType: 'EQ'    },
-  { token: '2',  symbol: 'TCS',       tradingSymbol: 'TCS',       name: 'Tata Consultancy Services', exchange: 'NSE', instrumentType: 'EQ'    },
-  { token: '3',  symbol: 'INFY',      tradingSymbol: 'INFY',      name: 'Infosys Ltd',               exchange: 'NSE', instrumentType: 'EQ'    },
-  { token: '4',  symbol: 'HDFCBANK',  tradingSymbol: 'HDFCBANK',  name: 'HDFC Bank Ltd',             exchange: 'NSE', instrumentType: 'EQ'    },
-  { token: '5',  symbol: 'ICICIBANK', tradingSymbol: 'ICICIBANK', name: 'ICICI Bank Ltd',            exchange: 'NSE', instrumentType: 'EQ'    },
-  { token: '6',  symbol: 'NIFTY50',   tradingSymbol: 'NIFTY50',   name: 'NIFTY 50 Index',           exchange: 'NSE', instrumentType: 'INDEX' },
-  { token: '7',  symbol: 'BANKNIFTY', tradingSymbol: 'BANKNIFTY', name: 'Bank Nifty Index',          exchange: 'NSE', instrumentType: 'INDEX' },
-  { token: '11', symbol: 'SBIN',      tradingSymbol: 'SBIN',      name: 'State Bank of India',       exchange: 'NSE', instrumentType: 'EQ'    },
-  { token: '12', symbol: 'WIPRO',     tradingSymbol: 'WIPRO',     name: 'Wipro Ltd',                 exchange: 'NSE', instrumentType: 'EQ'    },
-];
 
 export async function GET(request: NextRequest) {
   const q       = (request.nextUrl.searchParams.get('q') ?? '').trim();
@@ -84,15 +72,6 @@ export async function GET(request: NextRequest) {
     console.warn('[search] PostgreSQL error, falling back to mock:', e);
   }
 
-  // ── 3. In-memory mock (no backend available) ──────────────────────────────
-  const ql = q.toLowerCase();
-  let results = MOCK_INSTRUMENTS.filter(
-    i => i.symbol.toLowerCase().startsWith(ql) ||
-         i.name.toLowerCase().includes(ql) ||
-         i.tradingSymbol.toLowerCase().startsWith(ql),
-  );
-  if (exFilter)   results = results.filter(r => r.exchange.toLowerCase() === exFilter.toLowerCase());
-  if (typeFilter) results = results.filter(r => r.instrumentType.toLowerCase() === typeFilter.toLowerCase());
-
-  return NextResponse.json({ results: results.slice(0, limit), total: results.length, source: 'mock' });
+  // No results — security master not yet uploaded or DB unavailable.
+  return NextResponse.json({ results: [], total: 0, source: 'empty' });
 }
