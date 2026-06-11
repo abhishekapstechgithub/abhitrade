@@ -3,8 +3,10 @@
 import { redis } from '@/lib/redis-client';
 import { createHmac } from 'crypto';
 
-const LOGIN_URL  = 'https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword';
+const LOGIN_URL   = 'https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword';
 const SESSION_KEY = 'at:market:session';
+const LOCK_KEY    = 'at:market:session:lock';
+const LOCK_TTL    = 20; // seconds — max time a login is expected to take
 
 export interface AngelSession {
   accessToken: string;
@@ -49,7 +51,24 @@ export async function getAngelSession(
     if (s.feedToken && Date.now() < s.expiresAt) return s;
   }
 
+  // Acquire a Redis lock so concurrent requests don't all race to login.
+  // SET NX EX returns 'OK' if lock acquired, null if already held.
+  const lockAcquired = await redis.set(LOCK_KEY, '1', 'EX', LOCK_TTL, 'NX').catch(() => 'OK');
+  if (!lockAcquired) {
+    // Another request is logging in — poll for the cached session up to 10 s
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 500));
+      const waiting = await redis.get(SESSION_KEY).catch(() => null);
+      if (waiting) {
+        const s = JSON.parse(waiting) as AngelSession;
+        if (s.feedToken && Date.now() < s.expiresAt) return s;
+      }
+    }
+    throw new Error('AngelOne session unavailable — concurrent login timed out');
+  }
+
   // Login with TOTP retry (±1 step for clock skew)
+  try {
   for (const offset of [0, 1, -1]) {
     const res = await fetch(LOGIN_URL, {
       method:  'POST',
@@ -80,4 +99,7 @@ export async function getAngelSession(
     if (!isTotpErr) throw new Error(data.message || 'AngelOne login failed');
   }
   throw new Error('AngelOne login failed after 3 TOTP attempts');
+  } finally {
+    await redis.del(LOCK_KEY).catch(() => {});
+  }
 }
