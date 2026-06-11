@@ -228,20 +228,81 @@ export async function syncIndexPrices(): Promise<void> {
   }
 }
 
+// AngelOne symbol key → index_prices.symbol (bhavcopy table)
+const IDX_SYMBOL_TO_BHAVCOPY: Record<string, string> = {
+  'NIFTY':            'Nifty 50',
+  'BANKNIFTY':        'Nifty Bank',
+  'SENSEX':           'BSE SENSEX',
+  'NIFTY IT':         'Nifty IT',
+  'NIFTY MIDCAP 100': 'NIFTY Midcap 100',
+};
+
 export async function getIndexPrices(): Promise<Record<string, IndexPrice>> {
   const symbols = Object.values(IDX_TOKEN_SYMBOL);
+  const out: Record<string, IndexPrice> = {};
+
+  // 1. Try Redis (live AngelOne data)
   try {
     const pipeline = redis.pipeline();
     for (const s of symbols) pipeline.get(`at:idx:${s}`);
     const results = await pipeline.exec();
-    const out: Record<string, IndexPrice> = {};
     for (let i = 0; i < symbols.length; i++) {
       const val = results?.[i]?.[1];
       if (!val) continue;
       try { out[symbols[i]] = JSON.parse(String(val)) as IndexPrice; } catch {}
     }
-    return out;
-  } catch { return {}; }
+  } catch { /* fall through */ }
+
+  // 2. For any missing symbols, fall back to index_prices table (bhavcopy EOD data)
+  const missing = symbols.filter(s => !out[s]);
+  if (missing.length > 0) {
+    try {
+      const { getPool } = await import('@/lib/db/client');
+      const pool = getPool('live');
+      const bhavSymbols = missing.map(s => IDX_SYMBOL_TO_BHAVCOPY[s]).filter(Boolean);
+      if (bhavSymbols.length > 0) {
+        const rows = await pool.query<{
+          bsymbol: string; close_price: number | null; open_price: number | null;
+          high_price: number | null; low_price: number | null;
+          net_change: number | null; change_pct: number | null; price_date: Date | null;
+        }>(
+          `SELECT DISTINCT ON (symbol) symbol AS bsymbol,
+             close_price, open_price, high_price, low_price,
+             net_change, change_pct, price_date
+           FROM index_prices
+           WHERE symbol = ANY($1)
+           ORDER BY symbol, price_date DESC`,
+          [bhavSymbols]
+        );
+        // Build reverse map: bhavcopy symbol → AngelOne key
+        const reverseMap: Record<string, string> = {};
+        for (const [key, val] of Object.entries(IDX_SYMBOL_TO_BHAVCOPY)) {
+          reverseMap[val] = key;
+        }
+        for (const row of rows.rows) {
+          const angelKey = reverseMap[row.bsymbol];
+          if (!angelKey || out[angelKey]) continue; // skip if already from Redis
+          const n = (v: number | null) => v == null ? 0 : parseFloat(String(v));
+          const close = n(row.close_price);
+          const chg   = n(row.net_change);
+          const prev  = close - chg;
+          out[angelKey] = {
+            symbol:        angelKey,
+            ltp:           close,
+            change:        chg,
+            changePercent: n(row.change_pct),
+            open:          n(row.open_price)  || close,
+            high:          n(row.high_price)  || close,
+            low:           n(row.low_price)   || close,
+            close:         prev > 0 ? parseFloat(prev.toFixed(2)) : close,
+            updatedAt:     row.price_date ? new Date(row.price_date).getTime() : Date.now(),
+          };
+        }
+      }
+    } catch { /* bhavcopy fallback failed — return what we have */ }
+  }
+
+  return out;
 }
 
 // ── Public types ──────────────────────────────────────────────────────────────
