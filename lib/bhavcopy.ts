@@ -31,22 +31,28 @@ export interface BhavcopyStats {
 
 // ── SQL ────────────────────────────────────────────────────────────────────────
 
-const APPLY_MIGRATION_SQL = `
-ALTER TABLE security_master
-  ADD COLUMN IF NOT EXISTS ltp              DECIMAL(12,2),
-  ADD COLUMN IF NOT EXISTS open_price       DECIMAL(12,2),
-  ADD COLUMN IF NOT EXISTS high_price       DECIMAL(12,2),
-  ADD COLUMN IF NOT EXISTS low_price        DECIMAL(12,2),
-  ADD COLUMN IF NOT EXISTS close_price      DECIMAL(12,2),
-  ADD COLUMN IF NOT EXISTS prev_close       DECIMAL(12,2),
-  ADD COLUMN IF NOT EXISTS net_change       DECIMAL(12,2),
-  ADD COLUMN IF NOT EXISTS change_pct       DECIMAL(8,4),
-  ADD COLUMN IF NOT EXISTS volume           BIGINT,
-  ADD COLUMN IF NOT EXISTS open_interest    BIGINT,
-  ADD COLUMN IF NOT EXISTS price_date       DATE,
-  ADD COLUMN IF NOT EXISTS price_updated_at TIMESTAMPTZ;
-CREATE INDEX IF NOT EXISTS idx_sm_price_date ON security_master(price_date) WHERE price_date IS NOT NULL;
-`;
+// Run migration once per process lifetime — columns already exist after the
+// first call so subsequent ALTER TABLE IF NOT EXISTS no-ops immediately.
+let _migrationDone = false;
+async function ensureColumns(): Promise<void> {
+  if (_migrationDone) return;
+  await getPool('live').query(`
+    ALTER TABLE security_master
+      ADD COLUMN IF NOT EXISTS ltp              DECIMAL(12,2),
+      ADD COLUMN IF NOT EXISTS open_price       DECIMAL(12,2),
+      ADD COLUMN IF NOT EXISTS high_price       DECIMAL(12,2),
+      ADD COLUMN IF NOT EXISTS low_price        DECIMAL(12,2),
+      ADD COLUMN IF NOT EXISTS close_price      DECIMAL(12,2),
+      ADD COLUMN IF NOT EXISTS prev_close       DECIMAL(12,2),
+      ADD COLUMN IF NOT EXISTS net_change       DECIMAL(12,2),
+      ADD COLUMN IF NOT EXISTS change_pct       DECIMAL(8,4),
+      ADD COLUMN IF NOT EXISTS volume           BIGINT,
+      ADD COLUMN IF NOT EXISTS open_interest    BIGINT,
+      ADD COLUMN IF NOT EXISTS price_date       DATE,
+      ADD COLUMN IF NOT EXISTS price_updated_at TIMESTAMPTZ
+  `);
+  _migrationDone = true;
+}
 
 // Update by token (new format — FinInstrmId → token)
 const UPDATE_BY_TOKEN_SQL = `
@@ -214,8 +220,8 @@ async function processFile(filePath: string): Promise<BhavcopyResult> {
 export async function loadBhavcopy(): Promise<BhavcopyStats> {
   const dir = path.join(process.cwd(), 'Bhavcopy');
 
-  // Ensure columns exist before loading
-  await getPool('live').query(APPLY_MIGRATION_SQL).catch(() => {});
+  // Ensure price columns exist (no-op after first call)
+  await ensureColumns().catch(() => {});
 
   if (!fs.existsSync(dir)) {
     return { files: 0, totalLoaded: 0, totalSkipped: 0, results: [] };
