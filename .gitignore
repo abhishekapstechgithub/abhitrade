@@ -27,7 +27,6 @@ yarn-error.log*
 
 # local env files
 .env
-.env*.local
 
 # credentials & secrets — never commit
 CREDENTIALS.md
@@ -48,6 +47,10 @@ next-env.d.ts
 
 # Large OHLCV data files — stored in MongoDB, not git
 /tradechart/
+
+# EOD bhavcopy CSV data files — loaded into DB, not git
+/Bhavcopy/
+/index/
 
 # Claude Code memory
 /.claude/
