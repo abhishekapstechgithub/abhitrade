@@ -17,6 +17,15 @@ export type FileType = 'NSE_CM' | 'BSE_CM' | 'NSE_FO' | 'BSE_FO';
 
 // ─── Collection routing ───────────────────────────────────────────────────────
 
+// All collections that a given fileType can write to (used for pre-wipe)
+const ALL_COLLECTIONS: Record<FileType, string[]> = {
+  NSE_CM: ['NSE_E_EQUITY'],
+  BSE_CM: ['BSE_E_EQUITY'],
+  NSE_FO: ['NSE_D_FUTIDX', 'NSE_D_FUTSTK', 'NSE_D_OPTIDX', 'NSE_D_OPTSTK'],
+  BSE_FO: ['BSE_D_OPTSTK'],
+};
+
+// Per-row routing for FO (splits by instrument type)
 function getCollections(fileType: FileType, instrNm?: string): string[] {
   switch (fileType) {
     case 'NSE_CM': return ['NSE_E_EQUITY'];
@@ -28,7 +37,6 @@ function getCollections(fileType: FileType, instrNm?: string): string[] {
       if (t === 'OPTSTK') return ['NSE_D_OPTSTK'];
       if (t === 'FUTIDX') return ['NSE_D_FUTIDX'];
       if (t === 'FUTSTK') return ['NSE_D_FUTSTK'];
-      // fallback: put unknown FO types in OPTSTK
       return ['NSE_D_OPTSTK'];
     }
   }
@@ -105,6 +113,20 @@ export async function loadFileIntoMongo(
 
   // ── Connect MongoDB ───────────────────────────────────────────────────────
   const db = await getMongoDb();
+
+  // ── Wipe all target collections before loading ────────────────────────────
+  await setJob(jobId, { status: 'wiping', progress: 8 });
+  const wipedCounts: Record<string, number> = {};
+  for (const colName of ALL_COLLECTIONS[fileType]) {
+    const result = await db.collection(colName).deleteMany({});
+    wipedCounts[colName] = result.deletedCount ?? 0;
+    console.log(`[mongo-loader] Wiped ${wipedCounts[colName]} docs from ${colName}`);
+  }
+  await setJob(jobId, {
+    status: 'loading',
+    progress: 10,
+    wiped: Object.values(wipedCounts).reduce((a, b) => a + b, 0),
+  });
 
   let inserted = 0;
   let updated = 0;

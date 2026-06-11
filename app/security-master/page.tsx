@@ -292,6 +292,7 @@ export default function SecurityMasterPage() {
                 <span className="text-gray-600">
                   {activeJob?.status === 'queued'  && 'Queued…'}
                   {activeJob?.status === 'parsing' && 'Parsing CSV…'}
+                  {activeJob?.status === 'wiping'  && `Wiping existing data from ${FILE_TYPES.find(f=>f.id===activeJob.fileType)?.collections.join(', ')}…`}
                   {activeJob?.status === 'loading' && `Inserting into MongoDB… ${(activeJob.loaded ?? 0).toLocaleString('en-IN')} / ${(activeJob.totalRows ?? 0).toLocaleString('en-IN')}`}
                   {activeJob?.status === 'done'    && '✓ Done'}
                   {activeJob?.status === 'error'   && '✗ Error'}
@@ -325,8 +326,9 @@ export default function SecurityMasterPage() {
                 <span className="text-sm font-semibold text-green-700">Import complete</span>
                 <span className="ml-auto text-xs text-green-500">{fmtDur(Number(activeJob.durationMs))}</span>
               </div>
-              <div className="grid grid-cols-3 gap-3 text-center">
+              <div className="grid grid-cols-4 gap-3 text-center">
                 {[
+                  { label: 'Wiped',      val: Number((activeJob as JobStatus & {wiped?:number}).wiped ?? 0).toLocaleString('en-IN'), c: 'text-orange-600 font-bold' },
                   { label: 'Total Rows', val: Number(activeJob.totalRows ?? 0).toLocaleString('en-IN'), c: 'text-gray-700' },
                   { label: 'Inserted',   val: Number(activeJob.inserted  ?? 0).toLocaleString('en-IN'), c: 'text-green-700 font-bold' },
                   { label: 'Updated',    val: Number(activeJob.updated   ?? 0).toLocaleString('en-IN'), c: 'text-blue-700' },
