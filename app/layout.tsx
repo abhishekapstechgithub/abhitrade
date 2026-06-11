@@ -5,6 +5,7 @@ import { AppShell } from '@/components/layout/AppShell';
 import { MarketTickerProvider } from '@/components/layout/MarketTickerProvider';
 import { ThemeProvider } from '@/components/theme/ThemeProvider';
 import { ChartModal } from '@/components/charts/ChartModal';
+import { FirstLoginGuide } from '@/components/onboarding/FirstLoginGuide';
 import Link from 'next/link';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
@@ -42,6 +43,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </div>
             <AppShell>{children}</AppShell>
             <ChartModal />
+            <FirstLoginGuide />
           </MarketTickerProvider>
         </ThemeProvider>
       </body>

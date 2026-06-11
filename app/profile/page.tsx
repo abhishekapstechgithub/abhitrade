@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
-import { User, Shield, CreditCard, Bell, Settings, LogOut, Check, ChevronRight, Edit, Upload, Key, Zap, Activity, FlaskConical, RefreshCw } from 'lucide-react';
+import { User, Shield, CreditCard, Bell, Settings, LogOut, Check, ChevronRight, Edit, Upload, Key, Zap, Activity, FlaskConical, RefreshCw, BookOpen } from 'lucide-react';
+import { resetOnboardingGuide } from '@/components/onboarding/FirstLoginGuide';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { useTheme } from '@/components/theme/ThemeProvider';
@@ -60,6 +61,13 @@ export default function ProfilePage() {
                 </button>
               );
             })}
+            <button
+              onClick={() => { resetOnboardingGuide(); window.location.reload(); }}
+              className="w-full flex items-center gap-3 px-4 py-2.5 text-xs transition-colors hover:bg-blue-900/10"
+              style={{ color:'var(--text-dim)' }}>
+              <BookOpen size={13} />
+              <span className="flex-1 text-left font-medium">Show Getting Started Guide</span>
+            </button>
             <button className="w-full flex items-center gap-3 px-4 py-2.5 text-xs transition-colors hover:bg-red-900/10"
               style={{ color:'var(--accent-red)' }}>
               <LogOut size={13} />
