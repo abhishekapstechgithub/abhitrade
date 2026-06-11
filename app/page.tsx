@@ -3,8 +3,9 @@ import { ArrowUpRight, Layers, Activity, ShoppingCart, Zap, Target, Shield, Eye,
 import { useMarketStore } from '@/store/useMarketStore';
 import { usePaperTradingStore } from '@/store/usePaperTradingStore';
 import { useUIStore } from '@/store/useUIStore';
+import { useChartStore } from '@/store/useChartStore';
+import { lookupToken } from '@/lib/angelone/tokens';
 import { formatCurrency, formatNumber, formatPercent } from '@/lib/utils/format';
-import { optionChainData } from '@/lib/mock-data/market';
 import { mockPortfolio } from '@/lib/mock-data/portfolio';
 import { WatchlistItem } from '@/types';
 import { PaperPosition } from '@/store/usePaperTradingStore';
@@ -70,10 +71,10 @@ export default function DashboardPage() {
         <StrategyStrip />
       </div>
 
-      {/* Row 3 — Watchlist | Option chain | Quick panel */}
+      {/* Row 3 — Watchlist | Top Gainers/Losers | Quick panel */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
         <WatchlistPanel items={activeWatchlistItems} onOrder={openOrderPanel} />
-        <OptionChainPanel />
+        <TopGainersLosers />
         <SidePanel items={activeWatchlistItems} />
       </div>
 
@@ -295,9 +296,21 @@ function WatchlistRow({ item, dir, onOrder }: {
   onOrder: (sym: string, side: 'BUY' | 'SELL') => void;
 }) {
   const pos = item.changePercent >= 0;
+  const openChart = useChartStore(s => s.openChart);
+  function handleChartOpen(e: React.MouseEvent) {
+    if ((e.target as HTMLElement).closest('button')) return;
+    const info = lookupToken(item.symbol);
+    openChart({
+      symbol:   item.symbol,
+      exchange: info?.exchange ?? (item.exchange as string | undefined) ?? 'NSE',
+      token:    info?.token    ?? '',
+      name:     item.name,
+    });
+  }
   return (
     <div className="flex items-center px-3 py-2 group cursor-pointer"
       style={{ borderBottom: '1px solid var(--row-border)' }}
+      onClick={handleChartOpen}
       onMouseEnter={e => (e.currentTarget.style.background = 'var(--row-hover-bg)')}
       onMouseLeave={e => (e.currentTarget.style.background = '')}>
       <div className="flex-1 min-w-0">
@@ -342,42 +355,160 @@ function WatchlistPanel({ items, onOrder }: { items: WatchlistItem[]; onOrder: (
   );
 }
 
-// ── Option chain panel ────────────────────────────────────────────────────────
-function OptionChainPanel() {
-  const ceRows = optionChainData.filter(o => o.optionType === 'CE');
+// ── Top Gainers / Losers panel (data from AngelOne sync) ─────────────────────
+interface QuoteItem {
+  symbol: string; exchange: string; ltp: number;
+  netChange: number; percentChange: number; volume: number;
+}
+
+function TopGainersLosers() {
+  const [quotes, setQuotes]   = React.useState<QuoteItem[]>([]);
+  const [tab, setTab]         = React.useState<'gainers' | 'losers'>('gainers');
+  const [loading, setLoading] = React.useState(true);
+  const [lastSync, setLastSync] = React.useState<string | null>(null);
+  const openChart = useChartStore(s => s.openChart);
+
+  React.useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const [dataRes, statusRes] = await Promise.all([
+          fetch('/api/market-sync/data', { cache: 'no-store' }),
+          fetch('/api/market-sync',      { cache: 'no-store' }),
+        ]);
+        if (!alive) return;
+        const raw    = await dataRes.json()   as Record<string, QuoteItem>;
+        const status = await statusRes.json() as { lastSync: string | null };
+
+        // Deduplicate: one entry per symbol (skip trading-symbol aliases like SBIN-EQ)
+        const seen = new Set<string>();
+        const items: QuoteItem[] = [];
+        for (const q of Object.values(raw)) {
+          if (seen.has(q.symbol)) continue;
+          seen.add(q.symbol);
+          items.push(q);
+        }
+        setQuotes(items);
+        setLastSync(status.lastSync);
+      } catch { /* silently fall through to empty state */ }
+      finally { if (alive) setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const gainers = quotes.filter(q => q.percentChange > 0)
+    .sort((a, b) => b.percentChange - a.percentChange).slice(0, 8);
+  const losers  = quotes.filter(q => q.percentChange < 0)
+    .sort((a, b) => a.percentChange - b.percentChange).slice(0, 8);
+  const list = tab === 'gainers' ? gainers : losers;
+
   return (
-    <div className="glass rounded-2xl overflow-hidden" style={{ maxHeight: 360 }}>
-      <PanelHeader title="NIFTY Option Chain" icon={<Layers size={12} style={{ color: C(PURPLE) }} />} href="/markets?tab=option-chain" />
-      <div className="overflow-y-auto no-scrollbar">
-        <table className="w-full text-[10px]">
-          <thead className="sticky top-0" style={{ background: 'var(--table-head-bg)' }}>
-            <tr>
-              <th className="text-right px-2 py-1.5 font-semibold" style={{ color: 'var(--accent-green)' }}>CE LTP</th>
-              <th className="text-right px-2 py-1.5 font-medium" style={{ color: 'var(--text-label)' }}>OI</th>
-              <th className="text-center px-2 py-1.5 font-bold" style={{ color: 'var(--text-accent)' }}>STRIKE</th>
-              <th className="text-left px-2 py-1.5 font-medium" style={{ color: 'var(--text-label)' }}>OI</th>
-              <th className="text-left px-2 py-1.5 font-semibold" style={{ color: 'var(--accent-red)' }}>PE LTP</th>
-            </tr>
-          </thead>
-          <tbody>
-            {ceRows.map(ce => {
-              const pe = optionChainData.find(o => o.optionType === 'PE' && o.strike === ce.strike);
-              return (
-                <tr key={ce.strike}
-                  style={{ borderBottom: '1px solid var(--row-border)', background: ce.isAtm ? G(BLUE, 0.1) : undefined }}>
-                  <td className="text-right px-2 py-1.5 font-mono font-bold"
-                    style={{ color: ce.isItm ? 'var(--accent-green)' : 'var(--text-dim)' }}>{ce.ltp}</td>
-                  <td className="text-right px-2 py-1.5" style={{ color: 'var(--text-label)' }}>{(ce.oi / 1000).toFixed(0)}K</td>
-                  <td className="text-center px-2 py-1.5 font-bold"
-                    style={{ color: ce.isAtm ? C(CYAN) : 'var(--text-accent)' }}>{ce.strike}</td>
-                  <td className="text-left px-2 py-1.5" style={{ color: 'var(--text-label)' }}>{pe ? `${(pe.oi / 1000).toFixed(0)}K` : '-'}</td>
-                  <td className="text-left px-2 py-1.5 font-mono font-bold"
-                    style={{ color: pe?.isItm ? 'var(--accent-red)' : 'var(--text-dim)' }}>{pe?.ltp ?? '-'}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+    <div className="glass rounded-2xl overflow-hidden flex flex-col" style={{ maxHeight: 360 }}>
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-2.5 shrink-0"
+        style={{ borderBottom: '1px solid var(--panel-divider)' }}>
+        <span className="text-xs font-semibold flex items-center gap-1.5" style={{ color: 'var(--text-secondary)' }}>
+          <BarChart2 size={12} style={{ color: C(EMERALD) }} />
+          Top Gainers / Losers
+        </span>
+        <span className="text-[9px]" style={{ color: 'var(--text-dim)' }}>
+          {lastSync
+            ? `Synced ${new Date(lastSync).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`
+            : 'AngelOne Live'}
+        </span>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex shrink-0" style={{ borderBottom: '1px solid var(--panel-divider)' }}>
+        {(['gainers', 'losers'] as const).map(t => (
+          <button key={t} onClick={() => setTab(t)}
+            className="flex-1 py-1.5 text-[11px] font-bold uppercase tracking-wider transition-all"
+            style={{
+              color: tab === t
+                ? (t === 'gainers' ? 'var(--accent-green)' : 'var(--accent-red)')
+                : 'var(--text-dim)',
+              borderBottom: tab === t
+                ? `2px solid ${t === 'gainers' ? 'var(--accent-green)' : 'var(--accent-red)'}`
+                : '2px solid transparent',
+              background: tab === t
+                ? (t === 'gainers' ? 'rgba(var(--gain-rgb),0.07)' : 'rgba(var(--loss-rgb),0.07)')
+                : 'transparent',
+            }}>
+            {t === 'gainers' ? '▲ Gainers' : '▼ Losers'}
+          </button>
+        ))}
+      </div>
+
+      {/* Body */}
+      <div className="overflow-y-auto no-scrollbar flex-1">
+        {loading ? (
+          <div className="flex items-center justify-center py-10 text-xs" style={{ color: 'var(--text-dim)' }}>
+            Loading…
+          </div>
+        ) : list.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-10 gap-1.5 text-center px-4">
+            <TrendingUp size={24} style={{ color: 'var(--text-dim)', opacity: 0.4 }} />
+            <span className="text-xs" style={{ color: 'var(--text-dim)' }}>No data — market closed or sync pending</span>
+            <span className="text-[10px]" style={{ color: 'var(--text-label)' }}>AngelOne syncs every 4 h</span>
+          </div>
+        ) : (
+          <table className="w-full text-[10px]">
+            <thead className="sticky top-0" style={{ background: 'var(--table-head-bg)' }}>
+              <tr>
+                <th className="text-left px-3 py-1.5 font-semibold" style={{ color: 'var(--text-label)' }}>#&nbsp;Symbol</th>
+                <th className="text-right px-2 py-1.5 font-semibold" style={{ color: 'var(--text-label)' }}>LTP</th>
+                <th className="text-right px-2 py-1.5 font-semibold" style={{ color: 'var(--text-label)' }}>Chg</th>
+                <th className="text-right px-3 py-1.5 font-semibold" style={{ color: 'var(--text-label)' }}>Chg %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((q, i) => {
+                const pos = q.percentChange >= 0;
+                const info = lookupToken(q.symbol);
+                return (
+                  <tr key={q.symbol} className="cursor-pointer transition-colors"
+                    style={{ borderBottom: '1px solid var(--row-border)' }}
+                    onClick={() => openChart({ symbol: q.symbol, exchange: q.exchange, token: info?.token ?? '' })}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--row-hover-bg)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = '')}>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[9px] font-bold w-4 h-4 flex items-center justify-center rounded"
+                          style={{
+                            color:      pos ? 'var(--accent-green)' : 'var(--accent-red)',
+                            background: pos ? 'rgba(var(--gain-rgb),0.14)' : 'rgba(var(--loss-rgb),0.14)',
+                          }}>
+                          {i + 1}
+                        </span>
+                        <div>
+                          <div className="font-bold text-[11px] leading-tight" style={{ color: 'var(--text-secondary)' }}>
+                            {q.symbol}
+                          </div>
+                          <div className="text-[9px]" style={{ color: 'var(--text-dim)' }}>{q.exchange}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-2 py-2 text-right font-mono font-bold" style={{ color: 'var(--text-bright)' }}>
+                      {formatNumber(q.ltp)}
+                    </td>
+                    <td className="px-2 py-2 text-right font-mono text-[10px]" style={{ color: gainColor(pos) }}>
+                      {pos ? '+' : ''}{formatNumber(q.netChange)}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold"
+                        style={{
+                          background: pos ? 'rgba(var(--gain-rgb),0.12)' : 'rgba(var(--loss-rgb),0.12)',
+                          color: gainColor(pos),
+                        }}>
+                        {pos ? '+' : ''}{q.percentChange.toFixed(2)}%
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );

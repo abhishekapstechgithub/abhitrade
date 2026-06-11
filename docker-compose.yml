@@ -20,6 +20,24 @@ version: '3.9'
 
 services:
 
+  # ── MongoDB (historical OHLCV — tradechart collection) ────────────────────
+  mongodb:
+    image: mongo:7-jammy
+    container_name: abhitrade-mongodb
+    ports:
+      - '27017:27017'
+    volumes:
+      - mongodb_data:/data/db
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'mongosh', '--eval', 'db.adminCommand("ping").ok', '--quiet']
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks:
+      - abhitrade-net
+
   # ── PostgreSQL ─────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
@@ -119,10 +137,18 @@ services:
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-https://abhitrade.online/api}
       - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
       - UPLOAD_DIR=/app/tmp/uploads
+      - ANGELONE_API_KEY=${ANGELONE_API_KEY:-}
+      - ANGELONE_CLIENT_ID=${ANGELONE_CLIENT_ID:-}
+      - ANGELONE_PASSWORD=${ANGELONE_PASSWORD:-}
+      - ANGELONE_TOTP_SECRET=${ANGELONE_TOTP_SECRET:-}
+      - MONGODB_URI=mongodb://mongodb:27017
+      - MONGODB_DB=${MONGODB_DB:-abhitrade}
     depends_on:
       redis:
         condition: service_healthy
       postgres:
+        condition: service_healthy
+      mongodb:
         condition: service_healthy
     restart: unless-stopped
     stop_grace_period: 5s
@@ -194,6 +220,8 @@ volumes:
   postgres_data:
     driver: local
   redis_data:
+    driver: local
+  mongodb_data:
     driver: local
   uploads:
     driver: local

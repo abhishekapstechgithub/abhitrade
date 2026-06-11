@@ -4,6 +4,7 @@ import './globals.css';
 import { AppShell } from '@/components/layout/AppShell';
 import { MarketTickerProvider } from '@/components/layout/MarketTickerProvider';
 import { ThemeProvider } from '@/components/theme/ThemeProvider';
+import { ChartModal } from '@/components/charts/ChartModal';
 import Link from 'next/link';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
@@ -40,6 +41,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               {PREFETCH_ROUTES.map(r => <Link key={r} href={r} prefetch={true}>{r}</Link>)}
             </div>
             <AppShell>{children}</AppShell>
+            <ChartModal />
           </MarketTickerProvider>
         </ThemeProvider>
       </body>

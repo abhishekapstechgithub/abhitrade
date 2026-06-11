@@ -280,6 +280,37 @@ CREATE TABLE IF NOT EXISTS saved_strategies (
 CREATE INDEX IF NOT EXISTS idx_strategies_user ON saved_strategies(user_id);
 
 -- =============================================================================
+-- MARKET QUOTES  (live price snapshot synced from AngelOne every 4 h)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS market_quotes (
+  id              BIGSERIAL     PRIMARY KEY,
+  exchange        VARCHAR(10)   NOT NULL,
+  symbol          VARCHAR(100)  NOT NULL,
+  trading_symbol  VARCHAR(150),
+  token           VARCHAR(50),
+  ltp             DECIMAL(12,2),
+  open            DECIMAL(12,2),
+  high            DECIMAL(12,2),
+  low             DECIMAL(12,2),
+  close           DECIMAL(12,2),
+  net_change      DECIMAL(12,2),
+  percent_change  DECIMAL(8,4),
+  volume          BIGINT,
+  avg_price       DECIMAL(12,2),
+  open_interest   BIGINT,
+  week52_high     DECIMAL(12,2),
+  week52_low      DECIMAL(12,2),
+  upper_circuit   VARCHAR(20),
+  lower_circuit   VARCHAR(20),
+  last_trade_qty  INTEGER,
+  exch_feed_time  VARCHAR(50),
+  synced_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  UNIQUE (exchange, symbol)
+);
+CREATE INDEX IF NOT EXISTS idx_mq_symbol ON market_quotes(symbol);
+CREATE INDEX IF NOT EXISTS idx_mq_synced ON market_quotes(synced_at DESC);
+
+-- =============================================================================
 -- TRADE JOURNAL
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS journal_entries (

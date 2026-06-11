@@ -45,3 +45,9 @@ certbot/www/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Large OHLCV data files — stored in MongoDB, not git
+/tradechart/
+
+# Claude Code memory
+/.claude/

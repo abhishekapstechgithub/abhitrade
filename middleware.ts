@@ -11,6 +11,9 @@ const PUBLIC_PATHS = [
   '/api/auth/verify-otp',
   '/api/auth/register',
   '/api/health',
+  '/api/mongo-chart',
+  '/api/chart-data',
+  '/api/search',
   '/_next',
   '/favicon.ico',
 ];

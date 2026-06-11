@@ -1,0 +1,8 @@
+// Next.js instrumentation hook — runs once on server process startup.
+// Schedules the AngelOne market data sync (initial + every 4 h).
+export async function register() {
+  if (process.env.NEXT_RUNTIME === 'nodejs') {
+    const { scheduleMarketSync } = await import('./lib/market-sync');
+    scheduleMarketSync();
+  }
+}
