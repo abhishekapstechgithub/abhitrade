@@ -24,6 +24,18 @@ export interface SecurityMasterRow {
   option_type?: string;
   underlying?: string;
   freeze_quantity?: number;
+  // EOD prices (populated from bhavcopy)
+  ltp?:              number | null;
+  open_price?:       number | null;
+  high_price?:       number | null;
+  low_price?:        number | null;
+  close_price?:      number | null;
+  prev_close?:       number | null;
+  net_change?:       number | null;
+  change_pct?:       number | null;
+  volume?:           number | null;
+  open_interest?:    number | null;
+  price_date?:       string | null;
 }
 
 export interface WatchlistRow {

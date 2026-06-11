@@ -480,6 +480,8 @@ function LeftPanel({
   const [showDrop, setShowDrop]         = useState(false);
   const [dropResults, setDropResults]   = useState<Array<{
     token: string; exchange: string; symbol: string; name: string; instrumentType: string;
+    ltp?: number; open?: number; high?: number; low?: number; prevClose?: number;
+    netChange?: number; changePct?: number; volume?: number;
   }>>([]);
   const [dropLoading, setDropLoading]   = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
@@ -511,12 +513,21 @@ function LeftPanel({
 
   function addItem(r: typeof dropResults[0]) {
     if (!items.some(i => i.id === r.token || i.symbol === r.symbol)) {
+      const ltp       = r.ltp       ?? 0;
+      const prevClose = r.prevClose ?? 0;
+      const change    = r.netChange ?? (ltp && prevClose ? parseFloat((ltp - prevClose).toFixed(2)) : 0);
+      const changePct = r.changePct ?? (prevClose > 0 ? parseFloat(((change / prevClose) * 100).toFixed(2)) : 0);
       onAdd({
         id: r.token, symbol: r.symbol, name: r.name,
         exchange: r.exchange as 'NSE' | 'BSE',
         instrumentType: r.instrumentType as WatchlistItem['instrumentType'],
-        ltp: 0, change: 0, changePercent: 0,
-        bid: 0, ask: 0, volume: 0, high: 0, low: 0, open: 0, prevClose: 0,
+        ltp, change, changePercent: changePct,
+        bid: 0, ask: 0,
+        volume:   r.volume   ?? 0,
+        high:     r.high     ?? 0,
+        low:      r.low      ?? 0,
+        open:     r.open     ?? 0,
+        prevClose,
       });
     }
     setSearch(''); setShowDrop(false);
@@ -708,6 +719,9 @@ function LeftPanel({
                   {dropResults.map(r => {
                     const inList = items.some(i => i.id === r.token);
                     const { color, bg } = typeColor(r.instrumentType);
+                    const hasPrice  = r.ltp != null && r.ltp > 0;
+                    const chgPct    = r.changePct ?? 0;
+                    const pos       = chgPct >= 0;
                     return (
                       <button key={`${r.exchange}-${r.token}`}
                         onClick={() => addItem(r)}
@@ -727,6 +741,17 @@ function LeftPanel({
                           </div>
                           <div className="text-[10px] truncate" style={{ color: 'var(--text-label)' }}>{r.name}</div>
                         </div>
+                        {hasPrice && (
+                          <div className="text-right shrink-0">
+                            <div className="text-xs font-semibold" style={{ color: 'var(--text-bright)' }}>
+                              ₹{r.ltp!.toFixed(2)}
+                            </div>
+                            <div className="text-[10px] font-medium"
+                              style={{ color: pos ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                              {pos ? '+' : ''}{chgPct.toFixed(2)}%
+                            </div>
+                          </div>
+                        )}
                         <span className="text-[10px] shrink-0" style={{ color: 'var(--text-label)' }}>{r.exchange}</span>
                         {inList
                           ? <span className="text-[10px]" style={{ color: '#22c55e' }}>✓</span>

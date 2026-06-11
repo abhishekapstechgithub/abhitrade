@@ -55,6 +55,16 @@ export async function GET(request: NextRequest) {
           optionType:     r.option_type ?? undefined,
           underlying:     r.underlying  ?? undefined,
           lotSize:        r.lot_size,
+          // EOD prices from bhavcopy
+          ltp:            r.ltp       != null ? Number(r.ltp)        : undefined,
+          open:           r.open_price!= null ? Number(r.open_price) : undefined,
+          high:           r.high_price!= null ? Number(r.high_price) : undefined,
+          low:            r.low_price != null ? Number(r.low_price)  : undefined,
+          prevClose:      r.prev_close!= null ? Number(r.prev_close) : undefined,
+          netChange:      r.net_change!= null ? Number(r.net_change) : undefined,
+          changePct:      r.change_pct!= null ? Number(r.change_pct) : undefined,
+          volume:         r.volume    != null ? Number(r.volume)     : undefined,
+          priceDate:      r.price_date ?? undefined,
         }));
 
         // Cache in Redis for future lookups
