@@ -46,8 +46,9 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static    ./.next/static
 RUN mkdir -p public
 COPY --from=builder --chown=nextjs:nodejs /app/public          ./public
 
-# Upload temp dir writable by the app user
-RUN mkdir -p tmp/uploads && chown nextjs:nodejs tmp/uploads
+# Upload temp dir + bhavcopy/index data dirs — all writable by the app user
+RUN mkdir -p tmp/uploads Bhavcopy index && \
+    chown -R nextjs:nodejs tmp/uploads Bhavcopy index
 
 USER nextjs
 EXPOSE 3000

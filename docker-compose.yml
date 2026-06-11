@@ -182,8 +182,11 @@ services:
       - '3000'
     volumes:
       - uploads:/app/tmp/uploads
+      - bhavcopy_data:/app/Bhavcopy
+      - index_data:/app/index
     environment:
       - NODE_ENV=production
+      - COOKIE_SECURE=${COOKIE_SECURE:-false}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
@@ -193,7 +196,7 @@ services:
       - POSTGRES_DB_PAPER=abhitrade_papertrade
       - POSTGRES_USER=${POSTGRES_USER:-tradekaro}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-tradekaro}
-      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-https://abhitrade.com/api}
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://abhitrade.com/api}
       - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
       - UPLOAD_DIR=/app/tmp/uploads
       - ANGELONE_API_KEY=${ANGELONE_API_KEY:-}
@@ -292,6 +295,10 @@ volumes:
   mongodb_data:
     driver: local
   uploads:
+    driver: local
+  bhavcopy_data:
+    driver: local
+  index_data:
     driver: local
 
 networks:
