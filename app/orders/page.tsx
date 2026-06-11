@@ -193,18 +193,18 @@ export default function OrdersPage() {
     ordertype: 'MARKET', text: '',
   })) : []);
 
-  const allExchanges = [...new Set(allOrders.map((o: any) => o.exchange).filter(Boolean))];
-  const allStatuses  = [...new Set(allOrders.map((o: any) => {
+  const allExchanges = Array.from(new Set(allOrders.map((o: any) => o.exchange).filter(Boolean)));
+  const allStatuses  = Array.from(new Set(allOrders.map((o: any) => {
     const s = (o.status || '').toLowerCase();
     return s.charAt(0).toUpperCase() + s.slice(1);
-  }).filter(Boolean))];
-  const allProducts  = [...new Set(allOrders.map((o: any) => {
+  }).filter(Boolean)));
+  const allProducts  = Array.from(new Set(allOrders.map((o: any) => {
     const p = (o.producttype || '').toLowerCase();
     if (p.includes('deliver')) return 'Delivery';
     if (p.includes('intraday') || p.includes('mis')) return 'Intraday';
     if (p.includes('margin')) return 'Margin';
     return o.producttype;
-  }).filter(Boolean))];
+  }).filter(Boolean)));
 
   // Close filter on outside click
   useEffect(() => {
