@@ -2,10 +2,12 @@
 import { create } from 'zustand';
 
 export interface ChartTarget {
-  symbol:   string;
-  exchange: string;
-  token:    string;
-  name?:    string;
+  symbol:          string;
+  exchange:        string;
+  token:           string;
+  name?:           string;
+  instrumentType?: string;  // EQ | IDX | FUTIDX | FUTSTK | CE | PE
+  underlying?:     string;  // for derivatives: the underlying (NIFTY, SBIN, etc.)
 }
 
 interface ChartStore {

@@ -286,10 +286,14 @@ function IndicatorsModal({active,onToggle,onCustom,onClose,isDark}:{active:Set<s
 }
 
 // ─── Props ────────────────────────────────────────────────────────────────────
-interface Props { symbol:string; exchange:string; token:string; name?:string; theme?:ChartTheme; onThemeChange?:(t:ChartTheme)=>void }
+interface Props {
+  symbol:string; exchange:string; token:string; name?:string;
+  instrumentType?:string; underlying?:string;
+  theme?:ChartTheme; onThemeChange?:(t:ChartTheme)=>void;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
-export function KlineAdvancedChart({symbol,exchange,token,name,theme='light',onThemeChange}:Props) {
+export function KlineAdvancedChart({symbol,exchange,token,name,instrumentType='EQ',underlying='',theme='light',onThemeChange}:Props) {
   const chartRef   = useRef<HTMLDivElement>(null);
   const kChart     = useRef<KChart|null>(null);
   const paneIds    = useRef<Map<string,string>>(new Map());
@@ -408,8 +412,9 @@ export function KlineAdvancedChart({symbol,exchange,token,name,theme='light',onT
     setLoading(true);setError('');
     rawDataRef.current=[];oldestTsRef.current=0;hasMoreRef.current=true;loadingMoreRef.current=false;
     try{
-      const url=`/api/mongo-chart?symbol=${encodeURIComponent(sym)}&exchange=${encodeURIComponent(exch)}&interval=${interval}&limit=${INITIAL_LIMIT}`;
-      const r=await fetch(url,{cache:'no-store'});
+      // Try MongoDB first (right collection based on instrument type)
+      const mongoUrl=`/api/mongo-chart?symbol=${encodeURIComponent(sym)}&exchange=${encodeURIComponent(exch)}&interval=${interval}&instrumentType=${encodeURIComponent(instrumentType)}&underlying=${encodeURIComponent(underlying)}&limit=${INITIAL_LIMIT}`;
+      const r=await fetch(mongoUrl,{cache:'no-store'});
       if(!r.ok)throw new Error(`Server error ${r.status}`);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const json=await r.json() as{candles?:any[];error?:string;oldest?:number;hasMore?:boolean};
@@ -422,13 +427,15 @@ export function KlineAdvancedChart({symbol,exchange,token,name,theme='light',onT
         kChart.current?.applyNewData(data,!hasMoreRef.current);
         setBars(data.length);updateStats(data);return;
       }
-      if(!tkn){setError(`No data for ${sym}. Import historical data or upload security master.`);return;}
-      const r2=await fetch(`/api/chart-data?exchange=${exch}&token=${tkn}&interval=${interval}`,{cache:'no-store'});
+      // Fallback: fetch from AngelOne and cache to MongoDB
+      if(!tkn){setError(`No data for ${sym}. Upload security master or check AngelOne credentials.`);return;}
+      const angelUrl=`/api/chart-data?exchange=${exch}&token=${tkn}&symbol=${encodeURIComponent(sym)}&interval=${interval}&instrumentType=${encodeURIComponent(instrumentType)}&underlying=${encodeURIComponent(underlying)}`;
+      const r2=await fetch(angelUrl,{cache:'no-store'});
       if(!r2.ok)throw new Error(`Data API ${r2.status}`);
       const j2=await r2.json() as{candles?:[string,number,number,number,number,number][];error?:string};
       if(j2.error)throw new Error(j2.error);
       const raw=j2.candles??[];
-      if(!raw.length){setError('No candle data available.');return;}
+      if(!raw.length){setError('No candle data available from AngelOne.');return;}
       const data:KData[]=raw.map(row=>toKData(row as [string,number,number,number,number,number]));
       rawDataRef.current=data;hasMoreRef.current=false;
       kChart.current?.applyNewData(data,true);
@@ -436,13 +443,13 @@ export function KlineAdvancedChart({symbol,exchange,token,name,theme='light',onT
     }catch(e){setError(e instanceof Error?e.message:'Failed to load data');}
     finally{setLoading(false);}
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[]);
+  },[instrumentType,underlying]);
 
   const loadMoreData=useCallback(async(interval:string,sym:string,exch:string)=>{
     if(loadingMoreRef.current||!hasMoreRef.current||!oldestTsRef.current)return;
     loadingMoreRef.current=true;
     try{
-      const url=`/api/mongo-chart?symbol=${encodeURIComponent(sym)}&exchange=${encodeURIComponent(exch)}&interval=${interval}&limit=${INITIAL_LIMIT}&before=${oldestTsRef.current}`;
+      const url=`/api/mongo-chart?symbol=${encodeURIComponent(sym)}&exchange=${encodeURIComponent(exch)}&interval=${interval}&instrumentType=${encodeURIComponent(instrumentType)}&underlying=${encodeURIComponent(underlying)}&limit=${INITIAL_LIMIT}&before=${oldestTsRef.current}`;
       const r=await fetch(url,{cache:'no-store'});if(!r.ok)return;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const json=await r.json() as{candles?:any[];hasMore?:boolean;oldest?:number};
@@ -457,7 +464,7 @@ export function KlineAdvancedChart({symbol,exchange,token,name,theme='light',onT
     }catch{/*silent*/}
     finally{loadingMoreRef.current=false;}
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[]);
+  },[instrumentType,underlying]);
 
   useEffect(()=>{
     if(kChart.current)fetchData(tf,symbol,resolvedExchange,resolvedToken);

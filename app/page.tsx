@@ -6,10 +6,19 @@ import { useUIStore } from '@/store/useUIStore';
 import { useChartStore } from '@/store/useChartStore';
 import { lookupToken } from '@/lib/angelone/tokens';
 import { formatCurrency, formatNumber, formatPercent } from '@/lib/utils/format';
+import { useAngelOnePrices } from '@/hooks/useAngelOneWs';
 import { WatchlistItem } from '@/types';
 import { PaperPosition } from '@/store/usePaperTradingStore';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import React from 'react';
+
+// GainerLoserItem mirrors the shape returned by /api/gainers-losers
+interface GainerLoserItem {
+  symbol: string; tradingSymbol: string; token: string; exchange: string;
+  ltp: number; netChange: number; percentChange: number; volume: number;
+  open: number; high: number; low: number; close: number;
+}
 
 // Accent RGB strings — used ONLY for rgba() tints, never for text color directly
 const BLUE   = '41,121,255';
@@ -43,9 +52,59 @@ function Pill({ col, label }: { col: string; label: string }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
-  const { indices, activeWatchlistItems, priceDirections } = useMarketStore();
+  const { indices, priceDirections } = useMarketStore();
   const { openOrderPanel } = useUIStore();
   const { active: paperActive, virtualBalance, unrealizedPnl, realizedPnl, totalPnl, positions: paperPositions } = usePaperTradingStore();
+
+  // ── Dashboard watchlist loaded from localStorage ──────────────────────────
+  const [dashItems, setDashItems] = React.useState<WatchlistItem[]>([]);
+  const [dashPrices, setDashPrices] = React.useState<Record<string, { ltp: number; change: number; changePercent: number }>>({});
+
+  // Load items from localStorage on mount
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem('tk:watchlists');
+      if (!raw) return;
+      const all = JSON.parse(raw) as Record<string, WatchlistItem[]>;
+      const items = all['Watchlist1'] ?? Object.values(all).find(v => v.length > 0) ?? [];
+      setDashItems(items);
+    } catch { /* ignore parse errors */ }
+  }, []);
+
+  // Build WebSocket token list for dashboard watchlist
+  // item.id is the AngelOne token (same as watchlist page convention)
+  // Fall back to lookupToken for items added before token was stored in id
+  const dashWsTokens = React.useMemo(() =>
+    dashItems
+      .map(item => ({
+        token:          item.id || lookupToken(item.symbol)?.token || '',
+        exchange:       item.exchange,
+        instrumentType: item.instrumentType ?? 'EQ',
+      }))
+      .filter(t => !!t.token),
+  // Recompute only when item IDs change, not on every price tick
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [dashItems.map(i => i.id).join(',')]);
+
+  // Subscribe via WebSocket — updates dashPrices on every tick
+  useAngelOnePrices(dashWsTokens, React.useCallback((tick) => {
+    setDashPrices(prev => {
+      // Find the item whose id matches the token
+      const item = dashItems.find(i => (i.id || lookupToken(i.symbol)?.token) === tick.token);
+      if (!item) return prev;
+      const prevClose     = (tick.close && tick.close > 0) ? tick.close : (item.prevClose || tick.ltp);
+      const change        = parseFloat((tick.ltp - prevClose).toFixed(2));
+      const changePercent = prevClose > 0 ? parseFloat(((change / prevClose) * 100).toFixed(2)) : 0;
+      return { ...prev, [item.symbol]: { ltp: tick.ltp, change, changePercent } };
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dashItems]));
+
+  // Merge live prices into items for rendering
+  const dashWatchlist: WatchlistItem[] = dashItems.map(item => ({
+    ...item,
+    ...(dashPrices[item.symbol] ?? {}),
+  }));
 
   return (
     <div className="max-w-[1600px] mx-auto px-4 py-3 space-y-3 relative z-10">
@@ -72,9 +131,9 @@ export default function DashboardPage() {
 
       {/* Row 3 — Watchlist | Top Gainers/Losers | Quick panel */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
-        <WatchlistPanel items={activeWatchlistItems} onOrder={openOrderPanel} />
+        <WatchlistPanel items={dashWatchlist} onOrder={openOrderPanel} />
         <TopGainersLosers />
-        <SidePanel items={activeWatchlistItems} />
+        <SidePanel items={dashWatchlist} />
       </div>
 
       {/* Row 4 — Holdings (shows paper positions when active) */}
@@ -293,22 +352,40 @@ function WatchlistRow({ item, dir, onOrder }: {
   dir?: 'up' | 'down';
   onOrder: (sym: string, side: 'BUY' | 'SELL') => void;
 }) {
-  const pos = item.changePercent >= 0;
+  const pos       = item.changePercent >= 0;
+  const router    = useRouter();
   const openChart = useChartStore(s => s.openChart);
-  function handleChartOpen(e: React.MouseEvent) {
+  const info      = lookupToken(item.symbol);
+
+  function handleRowClick(e: React.MouseEvent) {
     if ((e.target as HTMLElement).closest('button')) return;
-    const info = lookupToken(item.symbol);
+    const exch  = info?.exchange ?? item.exchange ?? 'NSE';
+    const token = info?.token ?? '';
+    const params = new URLSearchParams({
+      sym:   item.symbol,
+      exch,
+      token,
+      name:  item.name ?? item.symbol,
+      type:  item.instrumentType ?? 'EQ',
+    });
+    router.push(`/watchlist?${params.toString()}`);
+  }
+
+  function handleChart(e: React.MouseEvent) {
+    e.stopPropagation();
     openChart({
-      symbol:   item.symbol,
-      exchange: info?.exchange ?? (item.exchange as string | undefined) ?? 'NSE',
-      token:    info?.token    ?? '',
-      name:     item.name,
+      symbol: item.symbol,
+      exchange: info?.exchange ?? item.exchange ?? 'NSE',
+      token: info?.token ?? '',
+      name: item.name ?? item.symbol,
+      instrumentType: item.instrumentType ?? 'EQ',
     });
   }
+
   return (
     <div className="flex items-center px-3 py-2 group cursor-pointer"
       style={{ borderBottom: '1px solid var(--row-border)' }}
-      onClick={handleChartOpen}
+      onClick={handleRowClick}
       onMouseEnter={e => (e.currentTarget.style.background = 'var(--row-hover-bg)')}
       onMouseLeave={e => (e.currentTarget.style.background = '')}>
       <div className="flex-1 min-w-0">
@@ -316,7 +393,6 @@ function WatchlistRow({ item, dir, onOrder }: {
         <div className="text-[10px] truncate" style={{ color: 'var(--text-label)' }}>{item.name}</div>
       </div>
       <div className="text-right mr-2 shrink-0">
-        {/* key forces remount → restarts the CSS tick animation */}
         <div className="text-xs font-mono font-bold" style={{ color: 'var(--text-bright)' }}>
           <span key={item.ltp} className={dir === 'up' ? 'tick-up' : dir === 'down' ? 'tick-down' : ''}>
             ₹{formatNumber(item.ltp)}
@@ -327,12 +403,18 @@ function WatchlistRow({ item, dir, onOrder }: {
         </div>
       </div>
       <div className="hidden group-hover:flex gap-1 shrink-0">
-        <button onClick={() => onOrder(item.symbol, 'BUY')}
+        <button onClick={e => { e.stopPropagation(); onOrder(item.symbol, 'BUY'); }}
           className="w-5 h-5 rounded text-[11px] font-bold text-white flex items-center justify-center"
           style={{ background: 'var(--accent-green)' }}>B</button>
-        <button onClick={() => onOrder(item.symbol, 'SELL')}
+        <button onClick={e => { e.stopPropagation(); onOrder(item.symbol, 'SELL'); }}
           className="w-5 h-5 rounded text-[11px] font-bold text-white flex items-center justify-center"
           style={{ background: 'var(--accent-red)' }}>S</button>
+        <button onClick={handleChart}
+          className="w-5 h-5 rounded flex items-center justify-center"
+          style={{ background: 'rgba(41,121,255,0.15)', color: '#2979ff', border: '1px solid rgba(41,121,255,0.3)' }}
+          title="Open chart">
+          <Activity size={9} />
+        </button>
       </div>
     </div>
   );
@@ -366,51 +448,38 @@ function WatchlistPanel({ items, onOrder }: { items: WatchlistItem[]; onOrder: (
   );
 }
 
-// ── Top Gainers / Losers panel (data from AngelOne sync) ─────────────────────
-interface QuoteItem {
-  symbol: string; exchange: string; ltp: number;
-  netChange: number; percentChange: number; volume: number;
-}
-
+// ── Top Gainers / Losers panel — powered by AngelOne gainers/losers API ──────
 function TopGainersLosers() {
-  const [quotes, setQuotes]   = React.useState<QuoteItem[]>([]);
-  const [tab, setTab]         = React.useState<'gainers' | 'losers'>('gainers');
-  const [loading, setLoading] = React.useState(true);
-  const [lastSync, setLastSync] = React.useState<string | null>(null);
-  const openChart = useChartStore(s => s.openChart);
+  const [gainers, setGainers]   = React.useState<GainerLoserItem[]>([]);
+  const [losers,  setLosers]    = React.useState<GainerLoserItem[]>([]);
+  const [tab,     setTab]       = React.useState<'gainers' | 'losers'>('gainers');
+  const [loading, setLoading]   = React.useState(true);
+  const [fetchedAt, setFetchedAt] = React.useState<Date | null>(null);
+  const openChart    = useChartStore(s => s.openChart);
+  const openOrderPanel = useUIStore(s => s.openOrderPanel);
 
-  React.useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const [dataRes, statusRes] = await Promise.all([
-          fetch('/api/market-sync/data', { cache: 'no-store' }),
-          fetch('/api/market-sync',      { cache: 'no-store' }),
-        ]);
-        if (!alive) return;
-        const raw    = await dataRes.json()   as Record<string, QuoteItem>;
-        const status = await statusRes.json() as { lastSync: string | null };
-
-        // Deduplicate: one entry per symbol (skip trading-symbol aliases like SBIN-EQ)
-        const seen = new Set<string>();
-        const items: QuoteItem[] = [];
-        for (const q of Object.values(raw)) {
-          if (seen.has(q.symbol)) continue;
-          seen.add(q.symbol);
-          items.push(q);
-        }
-        setQuotes(items);
-        setLastSync(status.lastSync);
-      } catch { /* silently fall through to empty state */ }
-      finally { if (alive) setLoading(false); }
-    })();
-    return () => { alive = false; };
+  const fetchData = React.useCallback(async () => {
+    try {
+      const [gRes, lRes] = await Promise.all([
+        fetch('/api/gainers-losers?type=gainers&limit=10', { cache: 'no-store' }),
+        fetch('/api/gainers-losers?type=losers&limit=10',  { cache: 'no-store' }),
+      ]);
+      const [gData, lData] = await Promise.all([gRes.json(), lRes.json()]) as
+        [{ items: GainerLoserItem[] }, { items: GainerLoserItem[] }];
+      setGainers(gData.items ?? []);
+      setLosers(lData.items ?? []);
+      setFetchedAt(new Date());
+    } catch { /* stay on last data */ }
+    finally { setLoading(false); }
   }, []);
 
-  const gainers = quotes.filter(q => q.percentChange > 0)
-    .sort((a, b) => b.percentChange - a.percentChange).slice(0, 8);
-  const losers  = quotes.filter(q => q.percentChange < 0)
-    .sort((a, b) => a.percentChange - b.percentChange).slice(0, 8);
+  // Initial fetch + 60-second refresh
+  React.useEffect(() => {
+    fetchData();
+    const id = setInterval(fetchData, 60_000);
+    return () => clearInterval(id);
+  }, [fetchData]);
+
   const list = tab === 'gainers' ? gainers : losers;
 
   return (
@@ -423,8 +492,8 @@ function TopGainersLosers() {
           Top Gainers / Losers
         </span>
         <span className="text-[9px]" style={{ color: 'var(--text-dim)' }}>
-          {lastSync
-            ? `Synced ${new Date(lastSync).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`
+          {fetchedAt
+            ? `Updated ${fetchedAt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`
             : 'AngelOne Live'}
         </span>
       </div>
@@ -459,8 +528,8 @@ function TopGainersLosers() {
         ) : list.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-10 gap-1.5 text-center px-4">
             <TrendingUp size={24} style={{ color: 'var(--text-dim)', opacity: 0.4 }} />
-            <span className="text-xs" style={{ color: 'var(--text-dim)' }}>No data — market closed or sync pending</span>
-            <span className="text-[10px]" style={{ color: 'var(--text-label)' }}>AngelOne syncs every 4 h</span>
+            <span className="text-xs" style={{ color: 'var(--text-dim)' }}>No data — configure AngelOne credentials</span>
+            <span className="text-[10px]" style={{ color: 'var(--text-label)' }}>Set ANGELONE_* env vars and restart</span>
           </div>
         ) : (
           <table className="w-full text-[10px]">
@@ -468,44 +537,42 @@ function TopGainersLosers() {
               <tr>
                 <th className="text-left px-3 py-1.5 font-semibold" style={{ color: 'var(--text-label)' }}>#&nbsp;Symbol</th>
                 <th className="text-right px-2 py-1.5 font-semibold" style={{ color: 'var(--text-label)' }}>LTP</th>
-                <th className="text-right px-2 py-1.5 font-semibold" style={{ color: 'var(--text-label)' }}>Chg</th>
-                <th className="text-right px-3 py-1.5 font-semibold" style={{ color: 'var(--text-label)' }}>Chg %</th>
+                <th className="text-right px-2 py-1.5 font-semibold" style={{ color: 'var(--text-label)' }}>Chg%</th>
+                <th className="px-2 py-1.5" />
               </tr>
             </thead>
             <tbody>
               {list.map((q, i) => {
                 const pos = q.percentChange >= 0;
-                const info = lookupToken(q.symbol);
                 return (
-                  <tr key={q.symbol} className="cursor-pointer transition-colors"
+                  <tr key={q.token || q.symbol} className="group cursor-pointer transition-colors"
                     style={{ borderBottom: '1px solid var(--row-border)' }}
-                    onClick={() => openChart({ symbol: q.symbol, exchange: q.exchange, token: info?.token ?? '' })}
                     onMouseEnter={e => (e.currentTarget.style.background = 'var(--row-hover-bg)')}
                     onMouseLeave={e => (e.currentTarget.style.background = '')}>
+                    {/* Symbol */}
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-1.5">
-                        <span className="text-[9px] font-bold w-4 h-4 flex items-center justify-center rounded"
+                        <span className="text-[9px] font-bold w-4 h-4 flex items-center justify-center rounded shrink-0"
                           style={{
                             color:      pos ? 'var(--accent-green)' : 'var(--accent-red)',
                             background: pos ? 'rgba(var(--gain-rgb),0.14)' : 'rgba(var(--loss-rgb),0.14)',
                           }}>
                           {i + 1}
                         </span>
-                        <div>
-                          <div className="font-bold text-[11px] leading-tight" style={{ color: 'var(--text-secondary)' }}>
+                        <div className="min-w-0">
+                          <div className="font-bold text-[11px] leading-tight truncate" style={{ color: 'var(--text-secondary)' }}>
                             {q.symbol}
                           </div>
                           <div className="text-[9px]" style={{ color: 'var(--text-dim)' }}>{q.exchange}</div>
                         </div>
                       </div>
                     </td>
+                    {/* LTP */}
                     <td className="px-2 py-2 text-right font-mono font-bold" style={{ color: 'var(--text-bright)' }}>
                       {formatNumber(q.ltp)}
                     </td>
-                    <td className="px-2 py-2 text-right font-mono text-[10px]" style={{ color: gainColor(pos) }}>
-                      {pos ? '+' : ''}{formatNumber(q.netChange)}
-                    </td>
-                    <td className="px-3 py-2 text-right">
+                    {/* Change % */}
+                    <td className="px-2 py-2 text-right">
                       <span className="px-1.5 py-0.5 rounded text-[10px] font-bold"
                         style={{
                           background: pos ? 'rgba(var(--gain-rgb),0.12)' : 'rgba(var(--loss-rgb),0.12)',
@@ -513,6 +580,26 @@ function TopGainersLosers() {
                         }}>
                         {pos ? '+' : ''}{q.percentChange.toFixed(2)}%
                       </span>
+                    </td>
+                    {/* Hover actions */}
+                    <td className="px-2 py-2 text-right">
+                      <div className="hidden group-hover:flex items-center justify-end gap-1">
+                        <button
+                          onClick={e => { e.stopPropagation(); openOrderPanel(q.symbol, 'BUY'); }}
+                          className="w-5 h-5 rounded text-[11px] font-bold text-white flex items-center justify-center"
+                          style={{ background: 'var(--accent-green)' }}>B</button>
+                        <button
+                          onClick={e => { e.stopPropagation(); openOrderPanel(q.symbol, 'SELL'); }}
+                          className="w-5 h-5 rounded text-[11px] font-bold text-white flex items-center justify-center"
+                          style={{ background: 'var(--accent-red)' }}>S</button>
+                        <button
+                          onClick={e => { e.stopPropagation(); openChart({ symbol: q.symbol, exchange: q.exchange, token: q.token, instrumentType: 'EQ' }); }}
+                          className="w-5 h-5 rounded flex items-center justify-center"
+                          style={{ background: 'rgba(41,121,255,0.15)', color: '#2979ff', border: '1px solid rgba(41,121,255,0.3)' }}
+                          title="Chart">
+                          <Activity size={9} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );

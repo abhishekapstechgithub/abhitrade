@@ -1,5 +1,7 @@
+export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
 import { getMongoDb } from '@/lib/mongodb';
+import { getChartCollection } from '@/lib/angelone/tokens';
 
 const TF_SEC: Record<string, number> = {
   ONE_MINUTE:      60,
@@ -17,11 +19,15 @@ const TF_SEC: Record<string, number> = {
 };
 
 export async function GET(req: NextRequest) {
-  const p          = req.nextUrl.searchParams;
-  const symbol     = (p.get('symbol')   ?? '').toUpperCase().trim();
-  const exchange   = (p.get('exchange') ?? 'NSE').toUpperCase().trim();
-  const interval   = p.get('interval')  ?? 'ONE_DAY';
-  const collection = p.get('col')       ?? 'tradechart';
+  const p              = req.nextUrl.searchParams;
+  const symbol         = (p.get('symbol')         ?? '').toUpperCase().trim();
+  const exchange       = (p.get('exchange')        ?? 'NSE').toUpperCase().trim();
+  const interval       = p.get('interval')         ?? 'ONE_DAY';
+  const instrumentType = (p.get('instrumentType')  ?? '').toUpperCase();
+  const underlying     = (p.get('underlying')      ?? '').toUpperCase();
+  // `col` param overrides auto-routing; auto-route when instrumentType is provided
+  const collection = p.get('col') ??
+    (instrumentType ? getChartCollection(exchange, instrumentType, underlying) : 'NSE_E_EQUITY');
   const limit      = Math.min(Math.max(parseInt(p.get('limit') ?? '500'), 50), 2000);
   // `before` = load candles whose bucket timestamp < this value (Unix seconds)
   // When 0/absent = get the most recent `limit` candles

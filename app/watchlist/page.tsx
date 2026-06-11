@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import {
   Plus, Search, Settings, X, RefreshCw,
@@ -13,6 +13,7 @@ import { useUIStore } from '@/store/useUIStore';
 import { lookupToken } from '@/lib/angelone/tokens';
 import { formatNumber, formatPercent, formatVolume } from '@/lib/utils/format';
 import type { WatchlistItem, OptionContract } from '@/types';
+import { useAngelOnePrices } from '@/hooks/useAngelOneWs';
 
 const STORAGE_KEY = 'tk:watchlists';
 
@@ -32,6 +33,40 @@ function saveToStorage(wlName: string, items: WatchlistItem[]) {
     all[wlName] = items;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
   } catch { /* ignore */ }
+}
+
+// ─── Live prices via WebSocket ────────────────────────────────────────────────
+// WatchlistItem.id is the AngelOne instrument token.
+// useAngelOnePrices subscribes to all items via the singleton WebSocket and
+// calls the setter on every tick — latency ~100 ms vs the old 5-second polling.
+function useWatchlistPrices(items: WatchlistItem[], setItems: React.Dispatch<React.SetStateAction<WatchlistItem[]>>) {
+  const wsTokens = useMemo(() =>
+    items.map(i => ({ token: i.id, exchange: i.exchange, instrumentType: i.instrumentType })),
+    // Recompute only when the set of item IDs changes, not on every LTP update
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [items.map(i => i.id).join(',')]
+  );
+
+  useAngelOnePrices(wsTokens, useCallback((tick) => {
+    setItems(prev => prev.map(item => {
+      if (item.id !== tick.token) return item;
+      const prevClose     = (tick.close && tick.close > 0) ? tick.close : (item.prevClose || tick.ltp);
+      const change        = parseFloat((tick.ltp - prevClose).toFixed(2));
+      const changePercent = prevClose > 0 ? parseFloat(((change / prevClose) * 100).toFixed(2)) : item.changePercent;
+      return {
+        ...item,
+        ltp:          tick.ltp,
+        change,
+        changePercent,
+        open:         tick.open   ?? item.open,
+        high:         tick.high   ?? item.high,
+        low:          tick.low    ?? item.low,
+        volume:       tick.volume ?? item.volume,
+        prevClose:    (tick.close && tick.close > 0) ? tick.close : item.prevClose,
+      };
+    }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []));
 }
 
 // Dynamic import — no SSR for the advanced chart (DOM-only)
@@ -347,13 +382,14 @@ function TableView({ items, activeWL, setActiveWL, onSwitchToChart, onSelectSymb
 // ─── COMPACT ROW (chart-mode left panel) ──────────────────────────────────────
 
 function CompactRow({
-  item, isActive, onSelect, onBuy, onSell,
+  item, isActive, onSelect, onBuy, onSell, onRemove,
 }: {
   item:     WatchlistItem;
   isActive: boolean;
   onSelect: () => void;
   onBuy:    () => void;
   onSell:   () => void;
+  onRemove: () => void;
 }) {
   const pos     = item.changePercent >= 0;
   const clr     = pos ? '#22c55e' : '#ef4444';
@@ -395,7 +431,7 @@ function CompactRow({
           </div>
         )}
       </div>
-      {/* Hover B/S */}
+      {/* Hover actions: B / S / delete */}
       <div className="hidden group-hover:flex items-center gap-1 shrink-0">
         <button onClick={e => { e.stopPropagation(); onBuy(); }}
           className="h-5 px-1.5 rounded text-[9px] font-bold text-white"
@@ -403,6 +439,13 @@ function CompactRow({
         <button onClick={e => { e.stopPropagation(); onSell(); }}
           className="h-5 px-1.5 rounded text-[9px] font-bold text-white"
           style={{ background: '#ef4444' }}>S</button>
+        <button
+          onClick={e => { e.stopPropagation(); onRemove(); }}
+          title="Remove from watchlist"
+          className="h-5 w-5 flex items-center justify-center rounded text-[9px] font-bold transition-colors"
+          style={{ background: 'rgba(239,68,68,0.12)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)' }}>
+          <X size={9} />
+        </button>
       </div>
     </div>
   );
@@ -416,6 +459,8 @@ interface LeftPanelProps {
   setActiveWL:   (i: number) => void;
   selectedId:    string | null;
   onSelect:      (item: WatchlistItem) => void;
+  onAdd:         (item: WatchlistItem) => void;
+  onRemove:      (id: string) => void;
   docked:        boolean;
   onUndock:      () => void;
   ocSymbol:      string;
@@ -427,6 +472,7 @@ interface LeftPanelProps {
 
 function LeftPanel({
   items, activeWL, setActiveWL, selectedId, onSelect,
+  onAdd, onRemove,
   docked, onUndock, ocSymbol, setOcSymbol, ocExpiry, setOcExpiry, onHide,
 }: LeftPanelProps) {
   const { openOrderPanel } = useUIStore();
@@ -436,11 +482,8 @@ function LeftPanel({
     token: string; exchange: string; symbol: string; name: string; instrumentType: string;
   }>>([]);
   const [dropLoading, setDropLoading]   = useState(false);
-  const [localItems, setLocalItems]     = useState(items);
   const searchRef = useRef<HTMLDivElement>(null);
   const debRef    = useRef<ReturnType<typeof setTimeout>>();
-
-  useEffect(() => { setLocalItems(items); }, [items]);
 
   useEffect(() => {
     if (search.length < 2) { setDropResults([]); setShowDrop(false); return; }
@@ -467,19 +510,19 @@ function LeftPanel({
   }, []);
 
   function addItem(r: typeof dropResults[0]) {
-    if (!localItems.some(i => i.id === r.token || i.symbol === r.symbol)) {
-      setLocalItems(prev => [{
+    if (!items.some(i => i.id === r.token || i.symbol === r.symbol)) {
+      onAdd({
         id: r.token, symbol: r.symbol, name: r.name,
         exchange: r.exchange as 'NSE' | 'BSE',
         instrumentType: r.instrumentType as WatchlistItem['instrumentType'],
         ltp: 0, change: 0, changePercent: 0,
         bid: 0, ask: 0, volume: 0, high: 0, low: 0, open: 0, prevClose: 0,
-      }, ...prev]);
+      });
     }
     setSearch(''); setShowDrop(false);
   }
 
-  const filtered = localItems.filter(i =>
+  const filtered = items.filter(i =>
     !search ||
     i.symbol.toLowerCase().includes(search.toLowerCase()) ||
     i.name.toLowerCase().includes(search.toLowerCase())
@@ -663,7 +706,7 @@ function LeftPanel({
                 style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-med)' }}>
                 <div className="max-h-52 overflow-y-auto">
                   {dropResults.map(r => {
-                    const inList = localItems.some(i => i.id === r.token);
+                    const inList = items.some(i => i.id === r.token);
                     const { color, bg } = typeColor(r.instrumentType);
                     return (
                       <button key={`${r.exchange}-${r.token}`}
@@ -709,7 +752,8 @@ function LeftPanel({
                 isActive={item.id === selectedId}
                 onSelect={() => onSelect(item)}
                 onBuy={() => openOrderPanel(item.symbol, 'BUY')}
-                onSell={() => openOrderPanel(item.symbol, 'SELL')} />
+                onSell={() => openOrderPanel(item.symbol, 'SELL')}
+                onRemove={() => onRemove(item.id)} />
             ))}
           </div>
         </>
@@ -1161,10 +1205,14 @@ interface ChartModeProps {
   activeWL:        number;
   setActiveWL:     (i: number) => void;
   onSwitchToTable: () => void;
+  onAdd:           (item: WatchlistItem) => void;
+  onRemove:        (id: string) => void;
+  initialSymbol?:  WatchlistItem | null;
 }
 
-function ChartMode({ items, activeWL, setActiveWL }: ChartModeProps) {
-  const [selectedItem, setSelectedItem]   = useState<WatchlistItem | null>(items[0] ?? null);
+function ChartMode({ items, activeWL, setActiveWL, onAdd, onRemove, initialSymbol }: ChartModeProps) {
+  const initItem = initialSymbol ?? items[0] ?? null;
+  const [selectedItem, setSelectedItem]   = useState<WatchlistItem | null>(initItem);
   const [dockOc, setDockOc]               = useState(false);
   const [showOcOverlay, setShowOcOverlay] = useState(false);
   const [activePanel, setActivePanel]     = useState<DockPanel>(null);
@@ -1259,6 +1307,8 @@ function ChartMode({ items, activeWL, setActiveWL }: ChartModeProps) {
             setActiveWL={setActiveWL}
             selectedId={selectedItem?.id ?? null}
             onSelect={item => { setSelectedItem(item); setDockOc(false); }}
+            onAdd={onAdd}
+            onRemove={(id) => { onRemove(id); if (selectedItem?.id === id) setSelectedItem(items.find(i => i.id !== id) ?? null); }}
             docked={dockOc}
             onUndock={() => setDockOc(false)}
             ocSymbol={ocSymbol} setOcSymbol={setOcSymbol}
@@ -1275,21 +1325,52 @@ function ChartMode({ items, activeWL, setActiveWL }: ChartModeProps) {
 // ─── PAGE ROOT ────────────────────────────────────────────────────────────────
 
 export default function WatchlistPage() {
-  const [items, setItems]   = useState<WatchlistItem[]>([]);
-  const [activeWL, setActiveWL] = useState(0);
-  const [viewMode, setViewMode] = useState<'chart' | 'table'>('chart');
+  const [items, setItems]         = useState<WatchlistItem[]>([]);
+  const [activeWL, setActiveWL]   = useState(0);
+  const [viewMode, setViewMode]   = useState<'chart' | 'table'>('chart');
+  const [initialSymbol, setInitialSymbol] = useState<WatchlistItem | null>(null);
+  const [loaded, setLoaded]       = useState(false);
 
   const wlName = WATCHLIST_NAMES[activeWL] ?? 'Watchlist1';
+
+  // Read URL params on mount (e.g. /watchlist?sym=RELIANCE&exch=NSE&token=2885&name=Reliance&type=EQ)
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    const sym   = sp.get('sym');
+    const exch  = (sp.get('exch') ?? 'NSE') as 'NSE' | 'BSE';
+    const token = sp.get('token') ?? '';
+    const name  = sp.get('name')  ?? sym ?? '';
+    const type  = (sp.get('type') ?? 'EQ') as WatchlistItem['instrumentType'];
+    if (sym) {
+      setInitialSymbol({
+        id: token || sym, symbol: sym, name, exchange: exch, instrumentType: type,
+        ltp: 0, change: 0, changePercent: 0,
+        bid: 0, ask: 0, volume: 0, high: 0, low: 0, open: 0, prevClose: 0,
+      });
+    }
+  }, []);
 
   // Load from localStorage on mount and when switching tabs
   useEffect(() => {
     setItems(loadFromStorage(wlName));
+    setLoaded(true);
   }, [wlName]);
 
-  // Persist to localStorage whenever items change
+  // Persist to localStorage whenever items change — only after initial load
   useEffect(() => {
-    saveToStorage(wlName, items);
-  }, [items, wlName]);
+    if (loaded) saveToStorage(wlName, items);
+  }, [items, wlName, loaded]);
+
+  function handleAdd(item: WatchlistItem) {
+    setItems(prev => prev.some(i => i.id === item.id) ? prev : [item, ...prev]);
+  }
+
+  function handleRemove(id: string) {
+    setItems(prev => prev.filter(i => i.id !== id));
+  }
+
+  // Live prices via WebSocket (replaces REST polling)
+  useWatchlistPrices(items, setItems);
 
   return (
     <div style={{
@@ -1334,6 +1415,9 @@ export default function WatchlistPage() {
             activeWL={activeWL}
             setActiveWL={setActiveWL}
             onSwitchToTable={() => setViewMode('table')}
+            onAdd={handleAdd}
+            onRemove={handleRemove}
+            initialSymbol={initialSymbol}
           />
         )}
       </div>

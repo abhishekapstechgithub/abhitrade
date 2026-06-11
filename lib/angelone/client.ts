@@ -127,9 +127,15 @@ export function getTradeBook(apiKey: string, accessToken: string) {
 }
 
 // ── Historical Candles ────────────────────────────────────────────────────────
+// Native AngelOne intervals — pass these directly to the API
 export type CandleInterval =
   | 'ONE_MINUTE' | 'THREE_MINUTE' | 'FIVE_MINUTE' | 'TEN_MINUTE'
   | 'FIFTEEN_MINUTE' | 'THIRTY_MINUTE' | 'ONE_HOUR' | 'ONE_DAY';
+
+// Extended set used internally (TWO_HOUR/FOUR_HOUR/ONE_WEEK/ONE_MONTH are
+// aggregated from ONE_HOUR/ONE_DAY by the mongo-chart bucketing layer)
+export type ExtendedInterval = CandleInterval
+  | 'TWO_HOUR' | 'FOUR_HOUR' | 'ONE_WEEK' | 'ONE_MONTH';
 
 export function getCandleData(
   apiKey: string, accessToken: string,

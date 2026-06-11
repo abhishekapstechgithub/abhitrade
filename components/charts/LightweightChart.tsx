@@ -17,6 +17,7 @@ import {
 type ChartType = 'candlestick' | 'line' | 'area' | 'bars';
 type DrawTool  = 'cursor' | 'crosshair' | 'trendline' | 'horzline' | 'fib' | 'channel' | 'rect' | 'text' | 'zoom' | 'magnet';
 
+// Intervals supported natively by AngelOne API + weekly/monthly (aggregated client-side)
 const INTERVALS = [
   { label: '1m',  value: 'ONE_MINUTE'     },
   { label: '3m',  value: 'THREE_MINUTE'   },
@@ -25,10 +26,7 @@ const INTERVALS = [
   { label: '15m', value: 'FIFTEEN_MINUTE' },
   { label: '30m', value: 'THIRTY_MINUTE'  },
   { label: '1h',  value: 'ONE_HOUR'       },
-  { label: '4h',  value: 'FOUR_HOUR'      },
   { label: '1D',  value: 'ONE_DAY'        },
-  { label: '1W',  value: 'ONE_WEEK'       },
-  { label: '1M',  value: 'ONE_MONTH'      },
 ];
 
 const CHART_TYPES: { label: string; value: ChartType; svg: string }[] = [
@@ -60,15 +58,17 @@ function getIST() {
 // ─── Props ───────────────────────────────────────────────────────────────────
 
 interface Props {
-  symbol:   string;
-  exchange: string;
-  token:    string;
-  name?:    string;
+  symbol:          string;
+  exchange:        string;
+  token:           string;
+  name?:           string;
+  instrumentType?: string;
+  underlying?:     string;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-export function LightweightChartView({ symbol: initSymbol, exchange: initExchange, token: initToken, name: initName }: Props) {
+export function LightweightChartView({ symbol: initSymbol, exchange: initExchange, token: initToken, name: initName, instrumentType: initInstrumentType = 'EQ', underlying: initUnderlying = '' }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef     = useRef<IChartApi | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -78,10 +78,12 @@ export function LightweightChartView({ symbol: initSymbol, exchange: initExchang
   const rawRef       = useRef<[string, number, number, number, number, number][]>([]);
 
   // Symbol target
-  const [symbol,   setSymbol]   = useState(initSymbol);
-  const [exchange, setExchange] = useState(initExchange);
-  const [token,    setToken]    = useState(initToken);
-  const [_name,    setName]     = useState(initName ?? initSymbol); // eslint-disable-line @typescript-eslint/no-unused-vars
+  const [symbol,         setSymbol]         = useState(initSymbol);
+  const [exchange,       setExchange]       = useState(initExchange);
+  const [token,          setToken]          = useState(initToken);
+  const [_name,          setName]           = useState(initName ?? initSymbol); // eslint-disable-line @typescript-eslint/no-unused-vars
+  const [instrumentType, setInstrumentType] = useState(initInstrumentType);
+  const [underlying,     setUnderlying]     = useState(initUnderlying);
 
   // UI state
   const [tf,           setTf]           = useState('ONE_DAY');
@@ -282,7 +284,38 @@ export function LightweightChartView({ symbol: initSymbol, exchange: initExchang
     if (!tkn) return;
     setLoading(true); setError('');
     try {
-      const res  = await fetch(`/api/chart-data?exchange=${exch}&token=${tkn}&interval=${interval}`, { cache: 'no-store' });
+      // Try MongoDB first (right collection based on instrument type)
+      const sym = symbol.toUpperCase();
+      const mongoUrl = `/api/mongo-chart?symbol=${encodeURIComponent(sym)}&exchange=${encodeURIComponent(exch)}&interval=${interval}&instrumentType=${encodeURIComponent(instrumentType)}&underlying=${encodeURIComponent(underlying)}&limit=500`;
+      const rMongo = await fetch(mongoUrl, { cache: 'no-store' });
+      if (rMongo.ok) {
+        const mj = await rMongo.json() as { candles?: [number,number,number,number,number,number][]; error?: string };
+        if (!mj.error && mj.candles && mj.candles.length > 0) {
+          // mongo-chart returns [unixSeconds, o, h, l, c, v]
+          const raw: [string, number, number, number, number, number][] = mj.candles.map(
+            ([ts, o, h, l, c, v]) => [new Date(ts * 1000).toISOString(), o, h, l, c, v]
+          );
+          rawRef.current = raw;
+          if (mainRef.current) populateSeries(mainRef.current, chartType, raw);
+          if (volumeRef.current) {
+            volumeRef.current.setData(raw.map(([ts, o,,, c, v]) => ({
+              time:  (Math.floor(new Date(ts).getTime() / 1000)) as UTCTimestamp,
+              value: v,
+              color: c >= o ? 'rgba(38,166,154,0.45)' : 'rgba(239,83,80,0.45)',
+            })));
+          }
+          chartRef.current?.timeScale().fitContent();
+          setBars(raw.length);
+          const last = raw[raw.length - 1];
+          const prev = raw.length > 1 ? raw[raw.length - 2][4] : last[1];
+          setLtp(last[4]); setChg(parseFloat((last[4] - prev).toFixed(2)));
+          setChgPct(parseFloat(((last[4] - prev) / prev * 100).toFixed(2)));
+          return;
+        }
+      }
+      // Fallback: fetch from AngelOne (saves to MongoDB automatically)
+      const angelUrl = `/api/chart-data?exchange=${exch}&token=${tkn}&symbol=${encodeURIComponent(sym)}&interval=${interval}&instrumentType=${encodeURIComponent(instrumentType)}&underlying=${encodeURIComponent(underlying)}`;
+      const res  = await fetch(angelUrl, { cache: 'no-store' });
       const json = await res.json() as { candles?: [string,number,number,number,number,number][]; error?: string };
       if (json.error) throw new Error(json.error);
       const raw = json.candles ?? [];
@@ -311,7 +344,7 @@ export function LightweightChartView({ symbol: initSymbol, exchange: initExchang
       setError(e instanceof Error ? e.message : 'Failed to load candles');
     } finally { setLoading(false); }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chartType]);
+  }, [chartType, symbol, instrumentType, underlying]);
 
   useEffect(() => {
     if (resolvedToken && !resolving) fetchData(tf, resolvedToken, resolvedExchange);
@@ -330,6 +363,8 @@ export function LightweightChartView({ symbol: initSymbol, exchange: initExchang
     setExchange(r.exchange);
     setToken(r.token);
     setName(r.name || r.symbol);
+    setInstrumentType(r.instrumentType || 'EQ');
+    setUnderlying('');
     setResolvedToken(r.token);
     setResolvedExchange(r.exchange);
     setShowSearch(false);

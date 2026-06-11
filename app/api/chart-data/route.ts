@@ -3,11 +3,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createHmac } from 'crypto';
 import { redis } from '@/lib/redis-client';
 import { getCandleData, CandleInterval } from '@/lib/angelone/client';
-import { candleDateRange, TF_TO_INTERVAL } from '@/lib/angelone/tokens';
+import { candleDateRange, getChartCollection, toApiInterval, toApiExchange } from '@/lib/angelone/tokens';
+import { getMongoDb } from '@/lib/mongodb';
 
 const ANGEL_LOGIN_URL =
   'https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword';
 
+// ── TOTP helpers ──────────────────────────────────────────────────────────────
 function base32Decode(s: string): Buffer {
   const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
   const input = s.toUpperCase().replace(/=+$/, '');
@@ -34,7 +36,7 @@ function totp(secret: string, offset = 0): string {
   return String(code % 1_000_000).padStart(6, '0');
 }
 
-async function getToken(apiKey: string, clientId: string, password: string, totpSecret: string): Promise<string> {
+async function getAccessToken(apiKey: string, clientId: string, password: string, totpSecret: string): Promise<string> {
   const cached = await redis.get('at:market:session').catch(() => null);
   if (cached) {
     const s = JSON.parse(cached) as { accessToken: string; expiresAt: number };
@@ -43,31 +45,114 @@ async function getToken(apiKey: string, clientId: string, password: string, totp
   for (const offset of [0, 1, -1]) {
     const res  = await fetch(ANGEL_LOGIN_URL, {
       method: 'POST',
-      headers: { 'Content-Type':'application/json', Accept:'application/json',
-        'X-UserType':'USER','X-SourceID':'WEB','X-ClientLocalIP':'127.0.0.1',
-        'X-ClientPublicIP':'106.51.128.1','X-MACAddress':'00:00:00:00:00:00','X-PrivateKey': apiKey },
+      headers: {
+        'Content-Type': 'application/json', Accept: 'application/json',
+        'X-UserType': 'USER', 'X-SourceID': 'WEB',
+        'X-ClientLocalIP': '127.0.0.1', 'X-ClientPublicIP': '106.51.128.1',
+        'X-MACAddress': '00:00:00:00:00:00', 'X-PrivateKey': apiKey,
+      },
       body: JSON.stringify({ clientcode: clientId, password, totp: totp(totpSecret, offset) }),
     });
-    const data = await res.json() as { status: boolean; message: string; errorcode: string; data: { jwtToken: string } | null };
+    const data = await res.json() as {
+      status: boolean; message: string; errorcode: string;
+      data: { jwtToken: string } | null;
+    };
     if (data.status && data.data?.jwtToken) {
       const { jwtToken } = data.data;
-      await redis.setex('at:market:session', 23*3600, JSON.stringify({ accessToken: jwtToken, expiresAt: Date.now() + 23*3600*1000 })).catch(() => {});
+      await redis.setex('at:market:session', 23 * 3600, JSON.stringify({
+        accessToken: jwtToken, expiresAt: Date.now() + 23 * 3600 * 1000,
+      })).catch(() => {});
       return jwtToken;
     }
     const isTotpErr = data.errorcode === 'AG8004' || (data.message ?? '').toLowerCase().includes('totp');
     if (!isTotpErr) throw new Error(data.message || 'Login failed');
   }
-  throw new Error('AngelOne login failed');
+  throw new Error('AngelOne login failed after 3 TOTP offsets');
 }
 
-// GET /api/chart-data?exchange=NSE&token=3045&interval=ONE_DAY
+// ── ISO timestamp → Unix seconds ─────────────────────────────────────────────
+function isoToUnix(ts: string | number): number {
+  if (typeof ts === 'number') return ts > 1e10 ? Math.floor(ts / 1000) : ts;
+  return Math.floor(new Date(ts).getTime() / 1000);
+}
+
+// ── Save candles to MongoDB ───────────────────────────────────────────────────
+async function saveToMongo(
+  symbol: string,
+  exchange: string,
+  token: string,
+  interval: string,
+  instrumentType: string,
+  underlying: string,
+  candles: [string, number, number, number, number, number][],
+): Promise<void> {
+  if (!candles.length) return;
+  try {
+    const db         = await getMongoDb();
+    const collection = getChartCollection(exchange, instrumentType, underlying);
+    const coll       = db.collection(collection);
+
+    // Ensure unique index on (Symbol, Exch, interval, Start_Time)
+    await coll.createIndex(
+      { Symbol: 1, Exch: 1, interval: 1, Start_Time: 1 },
+      { unique: true, background: true },
+    ).catch(() => {});
+
+    const ops = candles.map(([ts, o, h, l, c, v]) => ({
+      updateOne: {
+        filter: {
+          Symbol:     symbol.toUpperCase(),
+          Exch:       exchange.toUpperCase(),
+          token,
+          interval,
+          Start_Time: isoToUnix(ts),
+        },
+        update: {
+          $set: {
+            Symbol:     symbol.toUpperCase(),
+            Exch:       exchange.toUpperCase(),
+            token,
+            interval,
+            instrumentType,
+            underlying:  underlying || '',
+            Start_Time:  isoToUnix(ts),
+            Open:  o,
+            High:  h,
+            Low:   l,
+            Close: c,
+            Volume: v,
+            updatedAt: new Date(),
+          },
+        },
+        upsert: true,
+      },
+    }));
+
+    await coll.bulkWrite(ops, { ordered: false });
+    console.log(`[chart-data] saved ${candles.length} candles to MongoDB:${collection} for ${symbol}`);
+  } catch (e) {
+    // Non-fatal — chart still works without MongoDB cache
+    console.warn('[chart-data] MongoDB save failed:', e instanceof Error ? e.message : e);
+  }
+}
+
+// ── GET /api/chart-data ───────────────────────────────────────────────────────
+// Params: exchange, token, symbol, interval, instrumentType, underlying
 export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const exchange  = searchParams.get('exchange') ?? 'NSE';
-  const token     = searchParams.get('token')    ?? '';
-  const interval  = (searchParams.get('interval') ?? 'ONE_DAY') as CandleInterval;
+  const p              = req.nextUrl.searchParams;
+  const exchange       = (p.get('exchange')       ?? 'NSE').toUpperCase();
+  const token          = p.get('token')           ?? '';
+  const symbol         = (p.get('symbol')         ?? '').toUpperCase();
+  const interval       = p.get('interval')        ?? 'ONE_DAY';
+  const instrumentType = (p.get('instrumentType') ?? 'EQ').toUpperCase();
+  const underlying     = (p.get('underlying')     ?? '').toUpperCase();
 
   if (!token) return NextResponse.json({ error: 'token is required' }, { status: 400 });
+
+  // Map to the actual AngelOne exchange segment (NSE→NFO for derivatives, etc.)
+  const apiExchange = toApiExchange(exchange, instrumentType);
+  // Map to a valid AngelOne API interval (4h/1W/1M → 1h/1D; then aggregated by mongo-chart)
+  const apiInterval = toApiInterval(interval) as CandleInterval;
 
   const apiKey     = process.env.ANGELONE_API_KEY;
   const clientId   = process.env.ANGELONE_CLIENT_ID;
@@ -75,14 +160,34 @@ export async function GET(req: NextRequest) {
   const totpSecret = process.env.ANGELONE_TOTP_SECRET;
 
   if (!apiKey || !clientId || !password || !totpSecret) {
-    return NextResponse.json({ error: 'AngelOne credentials not configured on server' }, { status: 503 });
+    return NextResponse.json(
+      { error: 'AngelOne credentials not configured — set ANGELONE_API_KEY, ANGELONE_CLIENT_ID, ANGELONE_PASSWORD, ANGELONE_TOTP_SECRET in .env.local' },
+      { status: 503 },
+    );
   }
 
   try {
-    const accessToken = await getToken(apiKey, clientId, password, totpSecret);
-    const { from, to } = candleDateRange(interval);
-    const candles = await getCandleData(apiKey, accessToken, exchange, token, interval, from, to);
-    return NextResponse.json({ candles: candles ?? [], interval, from, to });
+    const accessToken   = await getAccessToken(apiKey, clientId, password, totpSecret);
+    const { from, to }  = candleDateRange(apiInterval);
+    const candles       = await getCandleData(apiKey, accessToken, apiExchange, token, apiInterval, from, to);
+    const safeCandles   = candles ?? [];
+    const collection    = getChartCollection(exchange, instrumentType, underlying);
+
+    // Store in MongoDB using the API interval (so 4h UI → ONE_HOUR candles stored,
+    // aggregated to 4h by the mongo-chart bucketing layer on read)
+    if (safeCandles.length && symbol) {
+      saveToMongo(symbol, exchange, token, apiInterval, instrumentType, underlying, safeCandles).catch(() => {});
+    }
+
+    return NextResponse.json({
+      candles:    safeCandles,
+      interval:   apiInterval,
+      from,
+      to,
+      collection,
+      symbol,
+      exchange:   apiExchange,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: msg }, { status: 500 });

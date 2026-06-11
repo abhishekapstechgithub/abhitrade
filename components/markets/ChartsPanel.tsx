@@ -32,6 +32,8 @@ export function ChartsPanel() {
         exchange="NSE"
         token="99926000"
         name="NIFTY 50"
+        instrumentType="IDX"
+        underlying="NIFTY"
       />
     </div>
   );

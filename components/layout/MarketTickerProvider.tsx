@@ -2,22 +2,58 @@
 import { useEffect } from 'react';
 import { useMarketStore } from '@/store/useMarketStore';
 import { usePaperTradingStore } from '@/store/usePaperTradingStore';
+import { useAngelOneWsInit, useAngelOnePrices } from '@/hooks/useAngelOneWs';
+import type { IndexPrice } from '@/lib/market-sync';
 
-const REAL_DATA_REFRESH_MS = 15 * 60 * 1000; // re-read AngelOne cache every 15 min
+// Map server-side symbol names → store symbol names
+const IDX_SYMBOL_MAP: Record<string, string> = {
+  'NIFTY':           'NIFTY 50',
+  'BANKNIFTY':       'NIFTY BANK',
+  'SENSEX':          'SENSEX',
+  'NIFTY IT':        'NIFTY IT',
+  'NIFTY MIDCAP 100':'NIFTY MIDCAP 100',
+};
+
+// AngelOne tokens for the five tracked indices
+const INDEX_TOKENS = [
+  { token: '99926000', exchange: 'NSE', instrumentType: 'INDEX' }, // NIFTY 50
+  { token: '99926009', exchange: 'NSE', instrumentType: 'INDEX' }, // BANK NIFTY
+  { token: '99919000', exchange: 'BSE', instrumentType: 'INDEX' }, // SENSEX
+  { token: '99926006', exchange: 'NSE', instrumentType: 'INDEX' }, // NIFTY IT
+  { token: '99926003', exchange: 'NSE', instrumentType: 'INDEX' }, // NIFTY MIDCAP 100
+];
 
 export function MarketTickerProvider({ children }: { children: React.ReactNode }) {
-  const fetchRealData = useMarketStore(s => s.fetchRealData);
-  const priceMap      = useMarketStore(s => s.priceMap);
-  const syncPrices    = usePaperTradingStore(s => s.syncPrices);
+  // Establish the WebSocket connection once (no-op if credentials missing)
+  useAngelOneWsInit();
 
-  // Pull real prices from AngelOne cache on mount and every 15 min.
-  // No fake ticker — prices update only when real data arrives.
+  const updateLivePrice = useMarketStore(s => s.updateLivePrice);
+  const setIndexData    = useMarketStore(s => s.setIndexData);
+  const fetchRealData   = useMarketStore(s => s.fetchRealData);
+  const priceMap        = useMarketStore(s => s.priceMap);
+  const syncPrices      = usePaperTradingStore(s => s.syncPrices);
+
+  // Subscribe to index tokens — every tick updates the Zustand store
+  useAngelOnePrices(INDEX_TOKENS, updateLivePrice);
+
+  // On mount: load cached index prices from Redis immediately (before WS connects)
   useEffect(() => {
-    fetchRealData();
-    const id = setInterval(fetchRealData, REAL_DATA_REFRESH_MS);
-    return () => clearInterval(id);
-  }, [fetchRealData]);
+    fetch('/api/index-prices')
+      .then(r => r.ok ? r.json() : null)
+      .then((data: { prices: Record<string, IndexPrice> } | null) => {
+        if (!data?.prices) return;
+        for (const [key, ip] of Object.entries(data.prices)) {
+          const storeSymbol = IDX_SYMBOL_MAP[key] ?? key;
+          setIndexData(storeSymbol, ip);
+        }
+      })
+      .catch(() => {
+        // Fallback: full AngelOne REST fetch if Redis is empty
+        fetchRealData();
+      });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Keep paper trading positions in sync with latest prices
   useEffect(() => {
     syncPrices(priceMap);
   }, [priceMap, syncPrices]);

@@ -4,7 +4,7 @@ import { redis, isRedisAvailable } from '@/lib/redis-client';
 import { searchInstrumentsPg } from '@/lib/db/repositories';
 import { isDbAvailable } from '@/lib/db/client';
 
-const CACHE_TTL = 3600;
+const CACHE_TTL = 300; // 5 min — keeps search fast without staling priority order
 
 // Redis cache key for a search query
 function cacheKey(q: string, exchange = 'all', type = 'all') {

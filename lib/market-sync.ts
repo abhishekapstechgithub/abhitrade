@@ -163,6 +163,87 @@ ON CONFLICT (exchange, symbol) DO UPDATE SET
   synced_at       = NOW()
 `;
 
+// ── Index price (lightweight 60-second sync) ──────────────────────────────────
+// Only the 5 tracked indices — one REST call per minute, very low overhead.
+const IDX_TOKENS: Record<string, string[]> = {
+  NSE: ['99926000', '99926009', '99926006', '99926003'],
+  BSE: ['99919000'],
+};
+const IDX_TOKEN_SYMBOL: Record<string, string> = {
+  '99926000': 'NIFTY',
+  '99926009': 'BANKNIFTY',
+  '99919000': 'SENSEX',
+  '99926006': 'NIFTY IT',
+  '99926003': 'NIFTY MIDCAP 100',
+};
+const IDX_TTL = 90; // 90 s — slightly longer than the 60-s poll interval
+
+export interface IndexPrice {
+  symbol:        string;
+  ltp:           number;
+  change:        number;
+  changePercent: number;
+  open:          number;
+  high:          number;
+  low:           number;
+  close:         number;
+  updatedAt:     number; // epoch ms
+}
+
+export async function syncIndexPrices(): Promise<void> {
+  const apiKey     = process.env.ANGELONE_API_KEY;
+  const clientId   = process.env.ANGELONE_CLIENT_ID;
+  const password   = process.env.ANGELONE_PASSWORD;
+  const totpSecret = process.env.ANGELONE_TOTP_SECRET;
+  if (!apiKey || !clientId || !password || !totpSecret) return;
+
+  try {
+    const accessToken = await getAccessToken(apiKey, clientId, password, totpSecret);
+    const result = await getMarketQuote(apiKey, accessToken, 'FULL', IDX_TOKENS);
+    const quotes = result?.fetched ?? [];
+    if (!quotes.length) return;
+
+    const pipeline = redis.pipeline();
+    for (const q of quotes) {
+      const symbol = IDX_TOKEN_SYMBOL[q.symbolToken];
+      if (!symbol) continue;
+      const payload: IndexPrice = {
+        symbol,
+        ltp:           q.ltp,
+        change:        q.netChange,
+        changePercent: q.percentChange,
+        open:          q.open,
+        high:          q.high,
+        low:           q.low,
+        close:         q.close,
+        updatedAt:     Date.now(),
+      };
+      pipeline.setex(`at:idx:${symbol}`, IDX_TTL, JSON.stringify(payload));
+    }
+    await pipeline.exec().catch(() => {});
+    console.log(`[market-sync] Index prices updated (${quotes.length} indices)`);
+  } catch (e) {
+    // Best-effort — don't let this crash the scheduler
+    console.warn('[market-sync] syncIndexPrices failed:', (e as Error).message);
+  }
+}
+
+export async function getIndexPrices(): Promise<Record<string, IndexPrice>> {
+  const symbols = Object.values(IDX_TOKEN_SYMBOL);
+  try {
+    const pipeline = redis.pipeline();
+    for (const s of symbols) pipeline.get(`at:idx:${s}`);
+    const results = await pipeline.exec();
+    const out: Record<string, IndexPrice> = {};
+    for (let i = 0; i < symbols.length; i++) {
+      const val = results?.[i]?.[1];
+      if (!val) continue;
+      try { out[symbols[i]] = JSON.parse(String(val)) as IndexPrice; } catch {}
+    }
+    return out;
+  } catch { return {}; }
+}
+
 // ── Public types ──────────────────────────────────────────────────────────────
 export interface SyncStatus {
   status: 'ok' | 'error' | 'never';
@@ -360,15 +441,21 @@ export function scheduleMarketSync(): void {
   if (global._marketSyncScheduled) return;
   global._marketSyncScheduled = true;
 
-  // Initial sync after 5 s to let DB + Redis finish connecting
+  // Full sync (all tokens → Postgres + Redis) on startup after 5 s, then every 4 h
   setTimeout(() => {
-    runMarketSync().catch(e => console.error('[market-sync] Initial sync error:', e));
+    runMarketSync().catch(e => console.error('[market-sync] Initial full sync error:', e));
   }, 5_000);
-
-  // Repeat every 4 hours
   setInterval(() => {
-    runMarketSync().catch(e => console.error('[market-sync] Scheduled sync error:', e));
+    runMarketSync().catch(e => console.error('[market-sync] Scheduled full sync error:', e));
   }, SYNC_INTERVAL_MS);
 
-  console.log('[market-sync] Scheduler started — syncing on startup + every 4 h');
+  // Lightweight index-only sync every 60 s (NIFTY, SENSEX, BANKNIFTY, IT, MIDCAP)
+  setTimeout(() => {
+    syncIndexPrices().catch(() => {});
+    setInterval(() => {
+      syncIndexPrices().catch(() => {});
+    }, 60_000);
+  }, 8_000); // start 8 s after startup (after full sync completes first)
+
+  console.log('[market-sync] Scheduler started — full sync every 4 h, index prices every 60 s');
 }

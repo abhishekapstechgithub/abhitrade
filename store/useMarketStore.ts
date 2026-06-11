@@ -2,7 +2,17 @@
 import { create } from 'zustand';
 import { MarketIndex, WatchlistItem } from '@/types';
 import { marketIndices } from '@/lib/mock-data/market';
-import type { CachedQuote } from '@/lib/market-sync';
+import type { CachedQuote, IndexPrice } from '@/lib/market-sync';
+import type { PriceTick } from '@/lib/angelone/websocket';
+
+// Maps AngelOne index tokens → display symbol (for WS price routing)
+const WS_TOKEN_TO_SYMBOL: Record<string, string> = {
+  '99926000': 'NIFTY 50',
+  '99926009': 'NIFTY BANK',
+  '99919000': 'SENSEX',
+  '99926006': 'NIFTY IT',
+  '99926003': 'NIFTY MIDCAP 100',
+};
 
 interface MarketStore {
   indices: MarketIndex[];
@@ -14,6 +24,10 @@ interface MarketStore {
   setSelectedSymbol: (symbol: string | null) => void;
   getPrice: (symbol: string) => number | null;
   fetchRealData: () => Promise<void>;
+  // Called by MarketTickerProvider on every WebSocket price tick for indices
+  updateLivePrice: (tick: PriceTick) => void;
+  // Called on mount with cached Redis index prices (before WebSocket connects)
+  setIndexData: (symbol: string, ip: IndexPrice) => void;
 }
 
 export const useMarketStore = create<MarketStore>((set, get) => ({
@@ -27,6 +41,54 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
   setSelectedSymbol: (symbol) => set({ selectedSymbol: symbol }),
 
   getPrice: (symbol) => get().priceMap[symbol.toUpperCase()] ?? null,
+
+  updateLivePrice: (tick) => set(state => {
+    const symbol = WS_TOKEN_TO_SYMBOL[tick.token];
+    if (!symbol) return state; // not a tracked index
+
+    const dirs        = { ...state.priceDirections };
+    const newPriceMap = { ...state.priceMap };
+
+    const newIndices = state.indices.map(idx => {
+      if (idx.symbol !== symbol) return idx;
+      dirs[idx.symbol] = tick.ltp >= idx.ltp ? 'up' : 'down';
+      newPriceMap[idx.symbol.toUpperCase()] = tick.ltp;
+      if (symbol === 'NIFTY 50') newPriceMap['NIFTY'] = tick.ltp;
+
+      // Use close from WS (prev-day close) for change computation when available
+      const prevClose = tick.close && tick.close > 0 ? tick.close : (idx.ltp || tick.ltp);
+      const change        = parseFloat((tick.ltp - prevClose).toFixed(2));
+      const changePercent = prevClose > 0
+        ? parseFloat(((change / prevClose) * 100).toFixed(2))
+        : idx.changePercent;
+      return { ...idx, ltp: tick.ltp, change, changePercent };
+    });
+
+    return { indices: newIndices, priceDirections: dirs, priceMap: newPriceMap };
+  }),
+
+  setIndexData: (symbol, ip) => set(state => {
+    const dirs        = { ...state.priceDirections };
+    const newPriceMap = { ...state.priceMap };
+
+    const newIndices = state.indices.map(idx => {
+      if (idx.symbol !== symbol) return idx;
+      dirs[idx.symbol] = ip.ltp >= idx.ltp ? 'up' : 'down';
+      newPriceMap[idx.symbol.toUpperCase()] = ip.ltp;
+      if (symbol === 'NIFTY 50') newPriceMap['NIFTY'] = ip.ltp;
+      return {
+        ...idx,
+        ltp:           ip.ltp,
+        open:          ip.open,
+        high:          ip.high,
+        low:           ip.low,
+        change:        parseFloat(ip.change.toFixed(2)),
+        changePercent: parseFloat(ip.changePercent.toFixed(2)),
+      };
+    });
+
+    return { indices: newIndices, priceDirections: dirs, priceMap: newPriceMap };
+  }),
 
   fetchRealData: async () => {
     try {

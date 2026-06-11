@@ -82,7 +82,7 @@ export function ChartModal() {
   }
 
   function selectResult(r: SearchResult) {
-    openChart({ symbol: r.symbol, exchange: r.exchange, token: r.token, name: r.name });
+    openChart({ symbol: r.symbol, exchange: r.exchange, token: r.token, name: r.name, instrumentType: r.instrumentType });
     setQuery('');
     setShowDrop(false);
     setResults([]);
@@ -217,6 +217,8 @@ export function ChartModal() {
             exchange={target.exchange}
             token={target.token}
             name={target.name}
+            instrumentType={target.instrumentType}
+            underlying={target.underlying}
           />
         </div>
       </div>

@@ -14,6 +14,10 @@ const PUBLIC_PATHS = [
   '/api/mongo-chart',
   '/api/chart-data',
   '/api/search',
+  '/api/ws-credentials',
+  '/api/market-data',
+  '/api/gainers-losers',
+  '/api/index-prices',
   '/_next',
   '/favicon.ico',
 ];

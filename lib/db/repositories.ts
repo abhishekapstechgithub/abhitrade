@@ -128,9 +128,25 @@ export async function searchInstrumentsPg(
   if (exchange) { where += ` AND exchange = $${n++}`; params.push(exchange); }
   if (type)     { where += ` AND instrument_type = $${n++}`; params.push(type); }
 
+  // Deduplicate on (symbol, exchange, instrument_type, trading_symbol), keep lowest token,
+  // then apply priority ordering in the outer query.
   const res = await getPool(mode).query<SecurityMasterRow>(
-    `SELECT * FROM security_master WHERE ${where}
-     ORDER BY CASE WHEN symbol ILIKE $1 THEN 0 ELSE 1 END, symbol LIMIT $2`,
+    `SELECT * FROM (
+       SELECT DISTINCT ON (symbol, exchange, instrument_type, trading_symbol) *
+       FROM security_master WHERE ${where}
+       ORDER BY symbol, exchange, instrument_type, trading_symbol, token
+     ) deduped
+     ORDER BY
+       CASE WHEN symbol ILIKE $1 THEN 0 ELSE 1 END,
+       CASE
+         WHEN exchange = 'NSE' AND instrument_type = 'EQ'    THEN 0
+         WHEN exchange = 'BSE' AND instrument_type = 'EQ'    THEN 1
+         WHEN exchange = 'NSE' AND instrument_type = 'INDEX' THEN 2
+         WHEN exchange = 'BSE' AND instrument_type = 'INDEX' THEN 3
+         ELSE 4
+       END,
+       symbol
+     LIMIT $2`,
     params,
   );
   return res.rows;
