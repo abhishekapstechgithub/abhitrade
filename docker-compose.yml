@@ -1,7 +1,7 @@
 version: '3.9'
 
 # ────────────────────────────────────────────────────────────────────────────
-#  TradeKaro — Production Docker Compose
+#  TradeKaro — Production Docker Compose (Microservices Architecture)
 #
 #  First deploy (with SSL):
 #    docker-compose up -d --build          ← starts everything
@@ -14,8 +14,10 @@ version: '3.9'
 #  Stop all:     docker-compose down
 #  Wipe volumes: docker-compose down -v
 #
-#  Traffic flow:
-#    Internet → Nginx (80/443) → app:3000 (internal only)
+#  Network topology:
+#    Internet → Nginx (proxy-net, 80/443) → app:3000 (proxy-net + app-net)
+#    app ↔ redis, postgres, mongodb, market-sync  (app-net)
+#    postgres ↔ redis  (db-net, internal-only)
 # ────────────────────────────────────────────────────────────────────────────
 
 services:
@@ -30,13 +32,18 @@ services:
       - mongodb_data:/data/db
     restart: unless-stopped
     healthcheck:
-      test: ['CMD', 'mongosh', '--eval', 'db.adminCommand("ping").ok', '--quiet']
+      test: ['CMD', 'mongosh', '--eval', "db.adminCommand('ping')", '--quiet']
       interval: 15s
-      timeout: 10s
+      timeout: 5s
       retries: 5
       start_period: 20s
     networks:
-      - abhitrade-net
+      - app-net
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: '0.5'
 
   # ── PostgreSQL ─────────────────────────────────────────────────────────────
   postgres:
@@ -59,7 +66,13 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - abhitrade-net
+      - app-net
+      - db-net
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '0.5'
 
   # ── Redis ──────────────────────────────────────────────────────────────────
   redis:
@@ -80,10 +93,54 @@ services:
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 10s
-      timeout: 5s
+      timeout: 3s
       retries: 5
     networks:
-      - abhitrade-net
+      - app-net
+      - db-net
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: '0.25'
+
+  # ── Market-sync worker (placeholder) ─────────────────────────────────────
+  # NOTE: This service is aspirational. lib/market-sync.ts exports
+  # runMarketSync and scheduleMarketSync but not a standalone startMarketSync.
+  # The worker runs inside the Next.js app via scheduleMarketSync() called
+  # from instrumentation.ts. This container is a placeholder for a future
+  # standalone TypeScript worker that compiles and runs independently.
+  market-sync:
+    image: node:18-alpine
+    container_name: abhitrade-market-sync
+    working_dir: /app/worker
+    volumes:
+      - ./lib/market-sync.ts:/app/worker/lib/market-sync.ts:ro
+      - ./lib/mongodb.ts:/app/worker/lib/mongodb.ts:ro
+      - ./lib/redis.ts:/app/worker/lib/redis.ts:ro
+      - ./package.json:/app/worker/package.json:ro
+      - ./package-lock.json:/app/worker/package-lock.json:ro
+    command: >
+      sh -c "echo 'market-sync worker starting...' && sleep infinity"
+    environment:
+      - NODE_ENV=production
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - MONGO_URI=mongodb://mongodb:27017/abhitrade
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - app-net
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: '0.25'
 
   # ── Security-master CSV loader (one-shot) ─────────────────────────────────
   loader:
@@ -109,8 +166,10 @@ services:
       postgres:
         condition: service_healthy
     restart: 'no'
+    profiles:
+      - tools
     networks:
-      - abhitrade-net
+      - app-net
 
   # ── Next.js App — internal only, fronted by Nginx ─────────────────────────
   # Port 3000 is NOT exposed to the host. All traffic comes through nginx.
@@ -154,12 +213,18 @@ services:
     stop_grace_period: 5s
     healthcheck:
       test: ['CMD-SHELL', 'wget -qO- http://localhost:3000/api/health || exit 1']
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     networks:
-      - abhitrade-net
+      - proxy-net
+      - app-net
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '1.0'
 
   # ── Nginx — reverse proxy + SSL termination ────────────────────────────────
   # Starts in HTTP-only mode if no SSL cert exists yet.
@@ -194,13 +259,18 @@ services:
     restart: unless-stopped
     stop_grace_period: 5s
     healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://localhost/api/health || exit 1']
+      test: ['CMD-SHELL', 'wget -qO- http://localhost/health || exit 1']
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 15s
     networks:
-      - abhitrade-net
+      - proxy-net
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: '0.25'
 
   # ── Certbot — auto-renews Let's Encrypt cert every 12 hours ───────────────
   # First-time cert: run  bash scripts/ssl-init.sh
@@ -212,9 +282,7 @@ services:
       - ./certbot/www:/var/www/certbot
     # Renew loop: wakes every 12h, only actually renews when <30 days remain
     entrypoint: /bin/sh -c 'trap exit TERM; while :; do certbot renew --quiet; sleep 12h & wait $${!}; done'
-    restart: unless-stopped
-    networks:
-      - abhitrade-net
+    restart: 'no'
 
 volumes:
   postgres_data:
@@ -227,6 +295,18 @@ volumes:
     driver: local
 
 networks:
-  abhitrade-net:
+  # nginx ↔ app only
+  proxy-net:
     driver: bridge
-    name: abhitrade-net
+    name: abhitrade-proxy-net
+
+  # app ↔ redis, postgres, mongodb, market-sync
+  app-net:
+    driver: bridge
+    name: abhitrade-app-net
+
+  # postgres ↔ redis (internal, no external access)
+  db-net:
+    driver: bridge
+    name: abhitrade-db-net
+    internal: true
