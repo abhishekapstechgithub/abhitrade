@@ -1,101 +1,152 @@
 /**
- * Security Master → MongoDB loader
+ * Security Master → PostgreSQL loader
  *
- * File types and their routing:
- *   NSE_CM  →  segment=CM  →  NSE_E_EQUITY
- *   BSE_CM  →  segment=CM  →  BSE_E_EQUITY
- *   NSE_FO  →  segment=FO  →  NSE_D_FUTIDX | NSE_D_FUTSTK | NSE_D_OPTIDX | NSE_D_OPTSTK  (by FinInstrmNm)
- *   BSE_FO  →  segment=FO  →  BSE_D_OPTSTK
+ * Routing (exchange + segment determines target rows to wipe before insert):
+ *   NSE_CM  →  exchange=NSE, segment=CM
+ *   BSE_CM  →  exchange=BSE, segment=CM
+ *   NSE_FO  →  exchange=NSE, segment=FO
+ *   BSE_FO  →  exchange=BSE, segment=FO
+ *
+ * Column mapping from raw CSV → security_master table:
+ *   FinInstrmId      → token
+ *   TckrSymb         → symbol  (+ trading_symbol for CM files)
+ *   StockNm          → trading_symbol (FO files)
+ *   FinInstrmNm      → name (CM) / instrument_type label (FO)
+ *   SctySrs / SrsId  → series
+ *   ISIN             → isin
+ *   NewBrdLotQty     → lot_size
+ *   TickSz/BidIntrvl → tick_size
+ *   XpryDt           → expiry  (unix-sec for NSE_FO; dd-MMM-yyyy for BSE_FO)
+ *   StrkPric         → strike  (raw value ÷ 100)
+ *   OptnTp           → option_type (CE/PE)
+ *   InstrmTp/FinInstrmNm → instrument_type
  */
 
 import { parse } from 'csv-parse/sync';
-import { readFile } from 'fs/promises';
-import { getMongoDb } from './mongodb';
+import { readFile }  from 'fs/promises';
+import { getPool }   from './db/client';
+import { upsertInstrumentsBatch, type SecurityMasterRow } from './db/repositories';
 import { redis, KEYS } from './redis-client';
 
 export type FileType = 'NSE_CM' | 'BSE_CM' | 'NSE_FO' | 'BSE_FO';
 
-// ─── Collection routing ───────────────────────────────────────────────────────
-
-// All collections that a given fileType can write to (used for pre-wipe)
-const ALL_COLLECTIONS: Record<FileType, string[]> = {
-  NSE_CM: ['NSE_E_EQUITY'],
-  BSE_CM: ['BSE_E_EQUITY'],
-  NSE_FO: ['NSE_D_FUTIDX', 'NSE_D_FUTSTK', 'NSE_D_OPTIDX', 'NSE_D_OPTSTK'],
-  BSE_FO: ['BSE_D_OPTSTK'],
-};
-
-// Per-row routing for FO (splits by instrument type)
-function getCollections(fileType: FileType, instrNm?: string): string[] {
-  switch (fileType) {
-    case 'NSE_CM': return ['NSE_E_EQUITY'];
-    case 'BSE_CM': return ['BSE_E_EQUITY'];
-    case 'BSE_FO': return ['BSE_D_OPTSTK'];
-    case 'NSE_FO': {
-      const t = (instrNm ?? '').toUpperCase().trim();
-      if (t === 'OPTIDX') return ['NSE_D_OPTIDX'];
-      if (t === 'OPTSTK') return ['NSE_D_OPTSTK'];
-      if (t === 'FUTIDX') return ['NSE_D_FUTIDX'];
-      if (t === 'FUTSTK') return ['NSE_D_FUTSTK'];
-      return ['NSE_D_OPTSTK'];
-    }
-  }
-}
-
-function segmentFor(fileType: FileType): string {
-  return fileType.endsWith('_CM') ? 'CM' : 'FO';
-}
-
-function exchangeFor(fileType: FileType): string {
-  return fileType.startsWith('NSE') ? 'NSE' : 'BSE';
-}
-
-// ─── Job status helpers ───────────────────────────────────────────────────────
-
+// ─── Job helpers ──────────────────────────────────────────────────────────────
 async function setJob(jobId: string, fields: Record<string, string | number>): Promise<void> {
   await redis.hset(KEYS.job(jobId), fields as Record<string, string>);
   await redis.expire(KEYS.job(jobId), 86400);
 }
 
-// ─── Main loader ──────────────────────────────────────────────────────────────
+// ─── CSV row → SecurityMasterRow ─────────────────────────────────────────────
 
-export interface MongoLoadResult {
-  fileType: FileType;
-  segment: string;
-  exchange: string;
-  totalRows: number;
-  inserted: number;
-  updated: number;
-  failed: number;
-  collections: Record<string, number>;
+function parseDate(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  // Unix timestamp (NSE_FO): e.g. "1467297000"
+  if (/^\d{7,}$/.test(raw.trim())) {
+    return new Date(parseInt(raw) * 1000).toISOString().slice(0, 10);
+  }
+  // dd-MMM-yyyy (BSE_FO): e.g. "27-AUG-2026"
+  if (/^\d{2}-[A-Za-z]{3}-\d{4}$/.test(raw.trim())) {
+    return new Date(raw.trim()).toISOString().slice(0, 10);
+  }
+  return undefined;
+}
+
+function toInstrumentType(fileType: FileType, row: Record<string, string>): string {
+  if (fileType === 'NSE_CM' || fileType === 'BSE_CM') {
+    // SctySrs: EQ, BE, BZ, SM, etc. — map to EQ / IDX / others
+    const srs = (row['SctySrs'] ?? '').toUpperCase();
+    if (srs === 'EQ' || srs === 'BE' || srs === 'BZ') return 'EQ';
+    if (srs === 'INDEX' || srs === 'IDX') return 'IDX';
+    return srs || 'EQ';
+  }
+  // FO files: FinInstrmNm = OPTIDX|OPTSTK|FUTIDX|FUTSTK (NSE) or SO|SF (BSE)
+  const nm = (row['FinInstrmNm'] ?? '').toUpperCase().trim();
+  const opt = (row['OptnTp'] ?? '').toUpperCase().trim();
+  if (nm.startsWith('OPT') || nm === 'SO') {
+    return opt === 'PE' ? 'PE' : 'CE';
+  }
+  if (nm.startsWith('FUT') || nm === 'SF') return 'FUT';
+  return nm || 'FUT';
+}
+
+function rowToPg(fileType: FileType, exchange: string, segment: string, row: Record<string, string>): SecurityMasterRow | null {
+  const token = (row['FinInstrmId'] ?? '').trim();
+  if (!token) return null;
+
+  const isCM = fileType === 'NSE_CM' || fileType === 'BSE_CM';
+  const symbol        = (row['TckrSymb'] ?? '').trim();
+  const tradingSymbol = isCM ? symbol : (row['StockNm'] ?? symbol).trim();
+  const name          = isCM
+    ? (row['FinInstrmNm'] ?? symbol).trim()
+    : (row['StockNm'] ?? row['TckrSymb'] ?? '').trim();
+  const isin       = (row['ISIN'] ?? '').trim() || undefined;
+  const lotRaw     = row['NewBrdLotQty'] ?? row['MinLot'] ?? '1';
+  const tickRaw    = row['TickSz'] ?? row['BidIntrvl'] ?? '0.05';
+  const lot_size   = parseInt(lotRaw) || 1;
+  const tick_size  = parseFloat(tickRaw) || 0.05;
+  const series     = (row['SctySrs'] ?? row['SrsId'] ?? '').trim() || undefined;
+  const instrType  = toInstrumentType(fileType, row);
+
+  // FO-only fields
+  const expiry      = isCM ? undefined : parseDate(row['XpryDt']);
+  const strikeRaw   = row['StrkPric'];
+  const strike      = strikeRaw ? parseFloat(strikeRaw) / 100 : undefined;
+  const optionType  = isCM ? undefined : ((row['OptnTp'] ?? '').toUpperCase().trim() || undefined);
+  const underlying  = isCM ? undefined : symbol;
+
+  return {
+    token,
+    exchange,
+    symbol,
+    trading_symbol:  tradingSymbol,
+    name,
+    isin,
+    instrument_type: instrType,
+    segment,
+    lot_size,
+    tick_size,
+    expiry,
+    strike,
+    option_type: optionType,
+    underlying,
+  };
+}
+
+// ─── Result type ──────────────────────────────────────────────────────────────
+export interface MongoLoadResult {       // name kept for import compatibility
+  fileType:   FileType;
+  segment:    string;
+  exchange:   string;
+  totalRows:  number;
+  wiped:      number;
+  inserted:   number;
+  failed:     number;
   durationMs: number;
 }
 
 const CHUNK = 500;
 
+// ─── Main loader ──────────────────────────────────────────────────────────────
 export async function loadFileIntoMongo(
   filePath: string,
   filename: string,
   fileType: FileType,
-  jobId: string,
-  overwrite = false,
+  jobId:    string,
+  _overwrite = false,           // ignored: wipe-then-insert is always full replace
 ): Promise<MongoLoadResult> {
-  const t0 = Date.now();
-  const segment = segmentFor(fileType);
-  const exchange = exchangeFor(fileType);
+  const t0       = Date.now();
+  const segment  = fileType.endsWith('_CM') ? 'CM' : 'FO';
+  const exchange = fileType.startsWith('NSE') ? 'NSE' : 'BSE';
 
   await setJob(jobId, { status: 'parsing', progress: 5, filename, fileType, segment, exchange });
 
-  // ── Read & parse CSV ──────────────────────────────────────────────────────
+  // ── Parse CSV ──────────────────────────────────────────────────────────────
   const content = await readFile(filePath);
   let rawRows: Record<string, string>[];
   try {
     rawRows = parse(content, {
-      columns: true,
-      skip_empty_lines: true,
-      trim: true,
-      relax_column_count: true,
-      bom: true,
+      columns: true, skip_empty_lines: true, trim: true,
+      relax_column_count: true, bom: true,
     }) as Record<string, string>[];
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -105,135 +156,60 @@ export async function loadFileIntoMongo(
 
   const total = rawRows.length;
   if (!total) {
-    await setJob(jobId, { status: 'error', error: 'File is empty or has no data rows' });
+    await setJob(jobId, { status: 'error', error: 'File is empty' });
     throw new Error('EMPTY_FILE');
   }
 
-  await setJob(jobId, { status: 'loading', totalRows: total, progress: 10 });
+  // ── Wipe existing rows for this exchange + segment ─────────────────────────
+  await setJob(jobId, { status: 'wiping', progress: 8, totalRows: total });
+  const pool = getPool('live');
+  const wipeRes = await pool.query(
+    'DELETE FROM security_master WHERE exchange = $1 AND segment = $2',
+    [exchange, segment],
+  );
+  const wiped = wipeRes.rowCount ?? 0;
+  console.log(`[pg-loader] Wiped ${wiped} rows (exchange=${exchange}, segment=${segment})`);
 
-  // ── Connect MongoDB ───────────────────────────────────────────────────────
-  const db = await getMongoDb();
+  await setJob(jobId, { status: 'loading', progress: 12, wiped });
 
-  // ── Wipe all target collections before loading ────────────────────────────
-  await setJob(jobId, { status: 'wiping', progress: 8 });
-  const wipedCounts: Record<string, number> = {};
-  for (const colName of ALL_COLLECTIONS[fileType]) {
-    const result = await db.collection(colName).deleteMany({});
-    wipedCounts[colName] = result.deletedCount ?? 0;
-    console.log(`[mongo-loader] Wiped ${wipedCounts[colName]} docs from ${colName}`);
-  }
-  await setJob(jobId, {
-    status: 'loading',
-    progress: 10,
-    wiped: Object.values(wipedCounts).reduce((a, b) => a + b, 0),
-  });
+  // ── Invalidate Redis search cache for this exchange ───────────────────────
+  // Pattern: tk:q:{exchange}:* — delete all cached searches for this exchange
+  try {
+    const cacheKeys = await redis.keys(`tk:q:${exchange}:*`);
+    if (cacheKeys.length) await redis.del(...cacheKeys);
+  } catch { /* non-fatal */ }
 
+  // ── Map + insert in chunks ─────────────────────────────────────────────────
   let inserted = 0;
-  let updated = 0;
-  let failed = 0;
-  const collectionCounts: Record<string, number> = {};
-
-  // ── Group rows by target collection ──────────────────────────────────────
-  // For NSE_FO we need to split rows into up to 4 collections by FinInstrmNm.
-  // For others, everything goes to one collection.
-  const groups: Map<string, Record<string, string>[]> = new Map();
-
-  for (const row of rawRows) {
-    const instrNm = row['FinInstrmNm'] ?? '';
-    const targets = getCollections(fileType, instrNm);
-    for (const col of targets) {
-      if (!groups.has(col)) groups.set(col, []);
-      groups.get(col)!.push(row);
-    }
-  }
-
-  // ── Upsert each group into its collection ──────────────────────────────
+  let failed   = 0;
   let processed = 0;
-  for (const [colName, rows] of Array.from(groups)) {
-    const coll = db.collection(colName);
-    collectionCounts[colName] = 0;
 
-    for (let i = 0; i < rows.length; i += CHUNK) {
-      const chunk = rows.slice(i, i + CHUNK);
-
-      // Build bulk ops — upsert by FinInstrmId (the unique token)
-      const ops = chunk.map((row: Record<string, string>) => {
-        const doc: Record<string, unknown> = {
-          ...row,
-          Segment: segment,
-          Exchange: exchange,
-          FileType: fileType,
-          _loadedAt: new Date(),
-        };
-        // Numeric conversions for FO files
-        if (fileType === 'NSE_FO' || fileType === 'BSE_FO') {
-          if (row['StrkPric']) doc['StrkPric'] = parseFloat(row['StrkPric']) / 100;
-          if (row['NewBrdLotQty']) doc['NewBrdLotQty'] = parseInt(row['NewBrdLotQty']);
-          if (row['MinLot']) doc['MinLot'] = parseInt(row['MinLot']);
-          // NSE FO expiry is unix timestamp; BSE FO is dd-MMM-yyyy string — keep as-is
-          if (fileType === 'NSE_FO' && row['XpryDt'] && /^\d+$/.test(row['XpryDt'])) {
-            doc['XpryDt'] = new Date(parseInt(row['XpryDt']) * 1000);
-          }
-        }
-        if (fileType === 'NSE_CM' || fileType === 'BSE_CM') {
-          if (row['NewBrdLotQty']) doc['NewBrdLotQty'] = parseInt(row['NewBrdLotQty']);
-        }
-        return {
-          updateOne: {
-            filter: { FinInstrmId: row['FinInstrmId'] },
-            update: { $set: doc },
-            upsert: true,
-          },
-        };
-      });
-
-      try {
-        const result = await coll.bulkWrite(ops, { ordered: false });
-        const ins = result.upsertedCount ?? 0;
-        const upd = result.modifiedCount ?? 0;
-        inserted += ins;
-        updated += upd;
-        collectionCounts[colName] += ins + upd;
-      } catch (e) {
-        console.error(`[mongo-loader] bulkWrite error in ${colName}:`, e);
-        failed += chunk.length;
-      }
-
-      processed += chunk.length;
-      const pct = Math.round(10 + (processed / total) * 88);
-      await setJob(jobId, {
-        progress: pct,
-        inserted,
-        updated,
-        failed,
-        loaded: inserted + updated,
-      });
+  for (let i = 0; i < rawRows.length; i += CHUNK) {
+    const chunk = rawRows.slice(i, i + CHUNK);
+    const pgRows: SecurityMasterRow[] = [];
+    for (const row of chunk) {
+      const r = rowToPg(fileType, exchange, segment, row);
+      if (r) pgRows.push(r);
+      else failed++;
     }
+    try {
+      const written = await upsertInstrumentsBatch(pgRows);
+      inserted += written;
+    } catch (e) {
+      console.error('[pg-loader] batch error:', e);
+      failed += pgRows.length;
+    }
+    processed += chunk.length;
+    const pct = Math.round(12 + (processed / total) * 86);
+    await setJob(jobId, { progress: pct, loaded: inserted });
   }
 
   const durationMs = Date.now() - t0;
-
   await setJob(jobId, {
-    status: 'done',
-    progress: 100,
-    totalRows: total,
-    inserted,
-    updated,
-    failed,
-    durationMs,
+    status: 'done', progress: 100,
+    totalRows: total, wiped, inserted, failed, durationMs,
     completedAt: new Date().toISOString(),
-    collections: JSON.stringify(collectionCounts),
   });
 
-  return {
-    fileType,
-    segment,
-    exchange,
-    totalRows: total,
-    inserted,
-    updated,
-    failed,
-    collections: collectionCounts,
-    durationMs,
-  };
+  return { fileType, segment, exchange, totalRows: total, wiped, inserted, failed, durationMs };
 }
