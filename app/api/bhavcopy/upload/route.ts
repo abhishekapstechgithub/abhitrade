@@ -30,15 +30,20 @@ export async function POST(req: NextRequest) {
   }
 
   const bhavDir = path.join(process.cwd(), 'Bhavcopy');
-  await mkdir(bhavDir, { recursive: true });
-
-  // Save each uploaded file into the Bhavcopy directory
   const saved: string[] = [];
-  for (const file of files) {
-    const buf = Buffer.from(await file.arrayBuffer());
-    const dest = path.join(bhavDir, file.name);
-    await writeFile(dest, buf);
-    saved.push(file.name);
+
+  try {
+    await mkdir(bhavDir, { recursive: true });
+
+    for (const file of files) {
+      const buf = Buffer.from(await file.arrayBuffer());
+      const dest = path.join(bhavDir, file.name);
+      await writeFile(dest, buf);
+      saved.push(file.name);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: `Failed to save file: ${msg}` }, { status: 500 });
   }
 
   // Run the loader on the whole directory (picks up just-saved files + any existing)

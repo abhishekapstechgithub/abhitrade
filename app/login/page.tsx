@@ -157,7 +157,9 @@ function BrandPanel() {
 function LoginContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const from = searchParams.get('from') || '/';
+  const rawFrom = searchParams.get('from') || '/';
+  // Guard against circular redirect — if `from` is the login page itself, go home
+  const from = rawFrom.startsWith('/login') || rawFrom.startsWith('/auth') ? '/' : rawFrom;
   const setUser = useAuthStore(s => s.setUser);
 
   const [tab, setTab] = useState<Tab>('signin');

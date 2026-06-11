@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect } from 'react';
+import { usePathname } from 'next/navigation';
 import { useAuthStore } from '@/store/useAuthStore';
 import {
   X, ChevronRight, ChevronLeft, BarChart2, Search, TrendingUp,
@@ -77,17 +78,21 @@ const STEPS: Step[] = [
 ];
 
 export function FirstLoginGuide() {
-  const user = useAuthStore(s => s.user);
+  const user     = useAuthStore(s => s.user);
+  const pathname = usePathname();
   const [visible, setVisible] = useState(false);
   const [step, setStep] = useState(0);
 
+  // Only show on dashboard pages, never on login/auth pages
+  const isAuthPage = pathname.startsWith('/login') || pathname.startsWith('/auth');
+
   useEffect(() => {
-    if (!user) return;
+    if (!user || isAuthPage) return;
     try {
       const seen = localStorage.getItem(STORAGE_KEY);
       if (!seen) setVisible(true);
     } catch { /* ignore */ }
-  }, [user]);
+  }, [user, isAuthPage]);
 
   function dismiss() {
     try { localStorage.setItem(STORAGE_KEY, '1'); } catch { /* ignore */ }
