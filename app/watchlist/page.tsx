@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import dynamic from 'next/dynamic';
 import {
   Plus, Search, Settings, X, RefreshCw,
   List, TrendingUp, FileText, BarChart2, Link2,
@@ -10,7 +9,6 @@ import {
   Filter, Columns, ChevronsUpDown,
 } from 'lucide-react';
 import { useUIStore } from '@/store/useUIStore';
-import { lookupToken } from '@/lib/angelone/tokens';
 import { formatNumber, formatPercent, formatVolume } from '@/lib/utils/format';
 import type { WatchlistItem, OptionContract } from '@/types';
 import { useAngelOnePrices } from '@/hooks/useAngelOneWs';
@@ -69,12 +67,7 @@ function useWatchlistPrices(items: WatchlistItem[], setItems: React.Dispatch<Rea
   }, []));
 }
 
-// Dynamic import — no SSR for the advanced chart (DOM-only)
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const AdvancedChart = dynamic<any>(
-  () => import('@/components/charts/AdvancedChart').then(m => m.AdvancedChart),
-  { ssr: false, loading: () => <ChartSkeleton /> },
-);
+import { ReligareChart, toMktSegId } from '@/components/charts/ReligareChart';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const WATCHLIST_NAMES = ['Watchlist1', 'Watchlist2', 'F&O Watch', 'Intraday'];
@@ -1109,15 +1102,13 @@ function CenterPanel({
 }: CenterPanelProps) {
   const isDark = chartTheme === 'dark';
 
-  const tokenInfo = selectedItem ? lookupToken(selectedItem.symbol) : null;
-  const token     = tokenInfo?.token ?? '';
-  const exchange  = tokenInfo?.exchange ?? selectedItem?.exchange ?? 'NSE';
+  const exchange = selectedItem?.exchange ?? 'NSE'; // kept for OC overlay
 
   return (
     <div className="flex flex-col h-full relative"
       style={{ background: isDark ? '#0d1117' : '#ffffff' }}>
 
-      {/* Chart — lightweight-charts with AngelOne data */}
+      {/* Chart */}
       <div className="flex-1 min-h-0 relative overflow-hidden">
         {!selectedItem ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3"
@@ -1131,14 +1122,12 @@ function CenterPanel({
             </p>
           </div>
         ) : activeTab === 'chart' ? (
-          <AdvancedChart
-            key={`${selectedItem.symbol}-${exchange}`}
-            symbol={selectedItem.symbol}
-            exchange={exchange}
-            token={token}
-            name={selectedItem.name}
+          <ReligareChart
+            key={`${selectedItem.id}-${selectedItem.exchange}`}
+            token={selectedItem.id}
+            mktsegid={toMktSegId(selectedItem.exchange, selectedItem.instrumentType)}
             theme={chartTheme}
-            onThemeChange={onChartThemeChange}
+            interval="DAY"
           />
         ) : (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3"

@@ -20,6 +20,7 @@ const PUBLIC_PATHS = [
   '/api/index-prices',
   '/api/bhavcopy',
   '/api/index-bhavcopy',
+  '/api/yahoo-chart',
   '/_next',
   '/favicon.ico',
 ];

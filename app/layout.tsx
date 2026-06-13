@@ -4,7 +4,7 @@ import './globals.css';
 import { AppShell } from '@/components/layout/AppShell';
 import { MarketTickerProvider } from '@/components/layout/MarketTickerProvider';
 import { ThemeProvider } from '@/components/theme/ThemeProvider';
-import { ChartModal } from '@/components/charts/ChartModal';
+import { ChartNavigator } from '@/components/charts/ChartNavigator';
 import { FirstLoginGuide } from '@/components/onboarding/FirstLoginGuide';
 import Link from 'next/link';
 
@@ -42,7 +42,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               {PREFETCH_ROUTES.map(r => <Link key={r} href={r} prefetch={true}>{r}</Link>)}
             </div>
             <AppShell>{children}</AppShell>
-            <ChartModal />
+            <ChartNavigator />
             <FirstLoginGuide />
           </MarketTickerProvider>
         </ThemeProvider>

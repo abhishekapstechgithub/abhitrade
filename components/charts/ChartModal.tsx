@@ -1,17 +1,9 @@
 'use client';
-import dynamic from 'next/dynamic';
 import { X, ExternalLink, Search, Loader2 } from 'lucide-react';
 import { useChartStore } from '@/store/useChartStore';
 import { useEffect, useState, useRef, useCallback } from 'react';
 
-const LightweightChartView = dynamic(
-  () => import('./LightweightChart').then(m => ({ default: m.LightweightChartView })),
-  { ssr: false, loading: () => (
-    <div className="flex items-center justify-center h-full" style={{ background: '#0d1117' }}>
-      <span className="text-xs text-slate-400">Loading chart…</span>
-    </div>
-  )},
-);
+import { ReligareChart, toMktSegId } from './ReligareChart';
 
 interface SearchResult {
   token: string; exchange: string; symbol: string;
@@ -212,13 +204,11 @@ export function ChartModal() {
 
         {/* Chart fills remaining space */}
         <div className="flex-1 min-h-0">
-          <LightweightChartView
-            symbol={target.symbol}
-            exchange={target.exchange}
+          <ReligareChart
             token={target.token}
-            name={target.name}
-            instrumentType={target.instrumentType}
-            underlying={target.underlying}
+            mktsegid={toMktSegId(target.exchange, target.instrumentType)}
+            theme="dark"
+            interval="DAY"
           />
         </div>
       </div>

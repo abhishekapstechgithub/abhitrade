@@ -412,7 +412,7 @@ export function KlineAdvancedChart({symbol,exchange,token,name,instrumentType='E
     setLoading(true);setError('');
     rawDataRef.current=[];oldestTsRef.current=0;hasMoreRef.current=true;loadingMoreRef.current=false;
     try{
-      // Try MongoDB first (right collection based on instrument type)
+      // 1. Try MongoDB first (fast local cache)
       const mongoUrl=`/api/mongo-chart?symbol=${encodeURIComponent(sym)}&exchange=${encodeURIComponent(exch)}&interval=${interval}&instrumentType=${encodeURIComponent(instrumentType)}&underlying=${encodeURIComponent(underlying)}&limit=${INITIAL_LIMIT}`;
       const r=await fetch(mongoUrl,{cache:'no-store'});
       if(!r.ok)throw new Error(`Server error ${r.status}`);
@@ -427,15 +427,29 @@ export function KlineAdvancedChart({symbol,exchange,token,name,instrumentType='E
         kChart.current?.applyNewData(data,!hasMoreRef.current);
         setBars(data.length);updateStats(data);return;
       }
-      // Fallback: fetch from AngelOne and cache to MongoDB
-      if(!tkn){setError(`No data for ${sym}. Upload security master or check AngelOne credentials.`);return;}
+      // 2. Fallback: Yahoo Finance (no auth, always available for NSE/BSE)
+      const yahooUrl=`/api/yahoo-chart?symbol=${encodeURIComponent(sym)}&exchange=${encodeURIComponent(exch)}&interval=${interval}&instrumentType=${encodeURIComponent(instrumentType)}`;
+      try{
+        const ry=await fetch(yahooUrl,{cache:'no-store'});
+        if(ry.ok){
+          const jy=await ry.json() as{candles?:[number,number,number,number,number,number][];error?:string};
+          if(!jy.error&&jy.candles&&jy.candles.length>0){
+            const data:KData[]=jy.candles.map(row=>toKData(row));
+            rawDataRef.current=data;hasMoreRef.current=false;
+            kChart.current?.applyNewData(data,true);
+            setBars(data.length);updateStats(data);return;
+          }
+        }
+      }catch{/*silent — fall through to AngelOne*/}
+      // 3. Fallback: AngelOne (requires credentials, caches to MongoDB)
+      if(!tkn){setError(`No data for ${sym}. Upload security master or check credentials.`);return;}
       const angelUrl=`/api/chart-data?exchange=${exch}&token=${tkn}&symbol=${encodeURIComponent(sym)}&interval=${interval}&instrumentType=${encodeURIComponent(instrumentType)}&underlying=${encodeURIComponent(underlying)}`;
       const r2=await fetch(angelUrl,{cache:'no-store'});
       if(!r2.ok)throw new Error(`Data API ${r2.status}`);
       const j2=await r2.json() as{candles?:[string,number,number,number,number,number][];error?:string};
       if(j2.error)throw new Error(j2.error);
       const raw=j2.candles??[];
-      if(!raw.length){setError('No candle data available from AngelOne.');return;}
+      if(!raw.length){setError('No candle data available.');return;}
       const data:KData[]=raw.map(row=>toKData(row as [string,number,number,number,number,number]));
       rawDataRef.current=data;hasMoreRef.current=false;
       kChart.current?.applyNewData(data,true);
@@ -471,9 +485,9 @@ export function KlineAdvancedChart({symbol,exchange,token,name,instrumentType='E
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[tf,symbol,resolvedExchange,resolvedToken]);
 
+  // Wire up the scroll-back-in-time callback after initial render
   useEffect(()=>{
     const t=setTimeout(()=>{
-      fetchData(tf,symbol,resolvedExchange,resolvedToken);
       if(kChart.current){
         try{
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -481,7 +495,7 @@ export function KlineAdvancedChart({symbol,exchange,token,name,instrumentType='E
             .setLoadMoreDataCallback(()=>{loadMoreData(tf,symbol,resolvedExchange);});
         }catch{/**/}
       }
-    },100);
+    },300);
     return()=>clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
