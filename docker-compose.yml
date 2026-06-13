@@ -4,15 +4,15 @@ version: '3.9'
 #  TradeKaro — Production Docker Compose (Microservices Architecture)
 #
 #  First deploy (with SSL):
-#    docker-compose up -d --build          ← starts everything
+#    docker compose up -d --build          ← starts everything
 #    bash scripts/ssl-init.sh              ← gets Let's Encrypt cert (run once)
 #
 #  Subsequent starts:
-#    docker-compose up -d --build
+#    docker compose up -d --build
 #
-#  Reload CSV:   docker-compose run --rm loader --force
-#  Stop all:     docker-compose down
-#  Wipe volumes: docker-compose down -v
+#  Reload CSV:   docker compose run --rm loader --force
+#  Stop all:     docker compose down
+#  Wipe volumes: docker compose down -v
 #
 #  Network topology:
 #    Internet → Nginx (proxy-net, 80/443) → app:3000 (proxy-net + app-net)
@@ -75,37 +75,6 @@ services:
     networks:
       - app-net
       - db-net
-    deploy:
-      resources:
-        limits:
-          memory: 256m
-          cpus: '0.25'
-
-  # ── Market-sync worker (placeholder) ─────────────────────────────────────
-  # NOTE: This service is aspirational. The worker runs inside the Next.js app
-  # via scheduleMarketSync() called from instrumentation.ts.
-  market-sync:
-    image: node:18-alpine
-    container_name: abhitrade-market-sync
-    working_dir: /app/worker
-    volumes:
-      - ./lib/market-sync.ts:/app/worker/lib/market-sync.ts:ro
-      - ./lib/redis.ts:/app/worker/lib/redis.ts:ro
-      - ./package.json:/app/worker/package.json:ro
-      - ./package-lock.json:/app/worker/package-lock.json:ro
-    command: >
-      sh -c "echo 'market-sync worker starting...' && sleep infinity"
-    environment:
-      - NODE_ENV=production
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-    depends_on:
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - app-net
     deploy:
       resources:
         limits:
@@ -199,7 +168,7 @@ services:
   # ── Nginx — reverse proxy + SSL termination ────────────────────────────────
   # Starts in HTTP-only mode if no SSL cert exists yet.
   # After running ssl-init.sh, restart nginx to activate HTTPS:
-  #   docker-compose restart nginx
+  #   docker compose restart nginx
   nginx:
     image: nginx:1.27-alpine
     container_name: abhitrade-nginx
