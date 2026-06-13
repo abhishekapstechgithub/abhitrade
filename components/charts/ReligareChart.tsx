@@ -8,7 +8,7 @@ interface Props {
   chartStyle?:  'line' | 'candle' | 'bar';
 }
 
-const API_KEY = process.env.NEXT_PUBLIC_RELIGARE_API_KEY ?? '';
+const API_KEY = process.env.NEXT_PUBLIC_RELIGARE_API_KEY ?? '0HVTVTkNzEg7Dwjd80T0bXbO8t8FThd';
 const BASE    = 'https://leap.religareonline.com/TV/index.html';
 
 // AngelOne uses virtual index tokens (99926000, 99926009 …) that differ from
@@ -37,8 +37,8 @@ export function ReligareChart({
   token,
   mktsegid  = 1,
   theme     = 'light',
-  interval  = 'DAY',
-  chartStyle = 'candle',
+  interval  = 'MIN',
+  chartStyle = 'line',
 }: Props) {
   // Remap AngelOne index virtual tokens → actual Religare tokens
   const mapped = ANGEL_TO_RELIGARE[token];
@@ -47,20 +47,20 @@ export function ReligareChart({
 
   const params = new URLSearchParams({
     ver:        'v1',
-    mode:       'adv',
+    mode:       'advance',
     pid:        '2',
     mktsegid:   String(resolvedMktsegid),
     tkn:        resolvedToken,
     period:     '1',
     interval,
     style:      chartStyle,
-    zoom:       'n',
+    zoom:       'y',
     xaxis:      'y',
     yaxis:      'y',
     hdr:        'y',
     title:      'n',
-    headsup:    'n',
-    buysell:    'n',
+    headsup:    'y',
+    buysell:    'y',
     lookup:     'y',
     theme:      theme === 'dark' ? 'd' : 'l',
     span:       '',
