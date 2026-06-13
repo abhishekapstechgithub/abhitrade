@@ -141,26 +141,18 @@ services:
       - '443:443'
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/conf.d/http.conf:/etc/nginx/conf.d/http.conf:ro
+      - ./nginx/conf.d/http.conf:/etc/nginx/http.conf.template:ro
       - ./nginx/conf.d/https.conf:/etc/nginx/https.conf.template:ro
+      - ./nginx/entrypoint.sh:/docker-entrypoint-custom.sh:ro
       - ./certbot/conf:/etc/letsencrypt:ro
       - ./certbot/www:/var/www/certbot:ro
-    command: >
-      /bin/sh -c "
-        if [ -f /etc/letsencrypt/live/abhitrade.com/fullchain.pem ]; then
-          echo 'SSL cert found — starting with HTTPS';
-          cp /etc/nginx/https.conf.template /etc/nginx/conf.d/https.conf;
-        else
-          echo 'No SSL cert yet — starting HTTP-only. Run ssl-init.sh then restart nginx.';
-        fi;
-        nginx -g 'daemon off;'
-      "
+    command: ["/bin/sh", "/docker-entrypoint-custom.sh"]
     depends_on:
       - app
     restart: unless-stopped
     stop_grace_period: 5s
     healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://localhost/api/health || exit 1']
+      test: ['CMD-SHELL', 'pgrep nginx > /dev/null || exit 1']
       interval: 30s
       timeout: 5s
       retries: 3
