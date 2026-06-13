@@ -12,7 +12,6 @@ interface Instrument {
   segment?: string;
 }
 
-// Default: NIFTY 50 — Angel virtual token remapped to 26000/NSE_EQ inside ReligareChart
 const DEFAULT: Instrument = {
   token: '99926000', exchange: 'NSE', symbol: 'NIFTY 50',
   name: 'NIFTY 50', instrumentType: 'IDX', segment: 'CM',
@@ -58,7 +57,7 @@ export function ChartsPanel() {
     <div className="rounded-xl overflow-hidden w-full flex flex-col"
       style={{ height: 'calc(100vh - 160px)', minHeight: 560, border: '1px solid #e2e8f0', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
 
-      {/* Search bar */}
+      {/* Symbol search bar */}
       <div className="flex items-center gap-2 px-3 py-2 bg-white border-b border-slate-200 shrink-0">
         <div className="relative flex-1 max-w-xs" ref={dropRef}>
           <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-200">
@@ -97,11 +96,9 @@ export function ChartsPanel() {
           )}
         </div>
 
-        {/* Current symbol pill */}
         <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
           <span>{selected.symbol}</span>
           <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 font-bold text-[10px]">{selected.exchange}</span>
-          <span className="text-[10px] text-slate-400">seg:{mktsegid} tkn:{selected.token}</span>
         </div>
       </div>
 
