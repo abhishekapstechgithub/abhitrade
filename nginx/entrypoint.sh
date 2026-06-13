@@ -11,8 +11,13 @@ if [ -f "$CERT" ]; then
   # Activate HTTPS server block
   cp /etc/nginx/https.conf.template /etc/nginx/conf.d/https.conf
 
-  # Switch HTTP block to redirect (keeps ACME challenge working for renewals)
+  # HTTP block: upstream + ACME challenge + redirect to HTTPS
   cat > /etc/nginx/conf.d/http.conf << 'NGINXEOF'
+upstream tradekaro_app {
+    server app:3000;
+    keepalive 32;
+}
+
 server {
     listen 80;
     server_name abhitrade.com www.abhitrade.com;
@@ -33,6 +38,7 @@ NGINXEOF
 else
   echo "[nginx] No SSL cert — starting in HTTP-only proxy mode"
   echo "        Run:  bash scripts/ssl-init.sh  to obtain the certificate"
+  # Use the full http.conf template (has upstream + proxy location)
   cp /etc/nginx/http.conf.template /etc/nginx/conf.d/http.conf
 fi
 
