@@ -7,7 +7,8 @@ export interface ChartTarget {
   token:           string;
   name?:           string;
   instrumentType?: string;  // EQ | IDX | FUTIDX | FUTSTK | CE | PE
-  underlying?:     string;  // for derivatives: the underlying (NIFTY, SBIN, etc.)
+  segment?:        string;  // CM | FO | CD — used to derive Religare mktsegid
+  underlying?:     string;
 }
 
 interface ChartStore {

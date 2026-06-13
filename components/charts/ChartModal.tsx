@@ -8,6 +8,7 @@ import { ReligareChart, toMktSegId } from './ReligareChart';
 interface SearchResult {
   token: string; exchange: string; symbol: string;
   tradingSymbol: string; name: string; instrumentType: string;
+  segment?: string;
 }
 
 export function ChartModal() {
@@ -74,7 +75,7 @@ export function ChartModal() {
   }
 
   function selectResult(r: SearchResult) {
-    openChart({ symbol: r.symbol, exchange: r.exchange, token: r.token, name: r.name, instrumentType: r.instrumentType });
+    openChart({ symbol: r.symbol, exchange: r.exchange, token: r.token, name: r.name, instrumentType: r.instrumentType, segment: r.segment });
     setQuery('');
     setShowDrop(false);
     setResults([]);
@@ -206,7 +207,7 @@ export function ChartModal() {
         <div className="flex-1 min-h-0">
           <ReligareChart
             token={target.token}
-            mktsegid={toMktSegId(target.exchange, target.instrumentType)}
+            mktsegid={toMktSegId(target.exchange, target.instrumentType, target.segment)}
             theme="dark"
             interval="DAY"
           />

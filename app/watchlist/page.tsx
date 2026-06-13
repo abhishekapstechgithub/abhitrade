@@ -1125,7 +1125,7 @@ function CenterPanel({
           <ReligareChart
             key={`${selectedItem.id}-${selectedItem.exchange}`}
             token={selectedItem.id}
-            mktsegid={toMktSegId(selectedItem.exchange, selectedItem.instrumentType)}
+            mktsegid={toMktSegId(selectedItem.exchange, selectedItem.instrumentType, (selectedItem as any).segment)}
             theme={chartTheme}
             interval="DAY"
           />

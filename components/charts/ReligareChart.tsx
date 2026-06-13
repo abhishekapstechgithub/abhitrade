@@ -15,22 +15,26 @@ const BASE    = 'https://leap.religareonline.com/TV/index.html';
 // Religare's NSE/BSE index tokens. Equities share the same NSE-assigned token.
 // Confirmed via Religare's ScripDetailsForChartUI + LookUp APIs.
 const ANGEL_TO_RELIGARE: Record<string, { token: string; mktsegid: number }> = {
-  '99926000': { token: '26000', mktsegid: 1 },  // NIFTY 50
-  '99926009': { token: '26009', mktsegid: 1 },  // BANKNIFTY
-  '99926037': { token: '26037', mktsegid: 1 },  // FINNIFTY
-  '99926008': { token: '26008', mktsegid: 1 },  // NIFTY IT
-  '99919000': { token: '19000', mktsegid: 3 },  // SENSEX (BSE)
-  '99919016': { token: '19016', mktsegid: 3 },  // BSE MIDCAP
+  '99926000': { token: '26000', mktsegid: 1 },  // NIFTY 50   (NSE_EQ=1)
+  '99926009': { token: '26009', mktsegid: 1 },  // BANKNIFTY  (NSE_EQ=1)
+  '99926037': { token: '26037', mktsegid: 1 },  // FINNIFTY   (NSE_EQ=1)
+  '99926008': { token: '26008', mktsegid: 1 },  // NIFTY IT   (NSE_EQ=1)
+  '99919000': { token: '19000', mktsegid: 8 },  // SENSEX     (BSE_EQ=8)
+  '99919016': { token: '19016', mktsegid: 8 },  // BSE MIDCAP (BSE_EQ=8)
 };
 
-// Derives Religare market segment ID from exchange + instrument type
-export function toMktSegId(exchange: string, instrumentType?: string): number {
-  const ex = (exchange ?? '').toUpperCase();
-  const it = (instrumentType ?? '').toUpperCase();
-  const isFO = ['FUTIDX','FUTSTK','OPTIDX','OPTSTK','CE','PE','FUT'].includes(it);
-  if (ex === 'BSE') return isFO ? 4 : 3;
+// Segment ID mapping (from Religare API spec):
+// 1=NSE_EQ  2=NSE_FO  3=NSE_CUR  4=BSE_FO  8=BSE_EQ
+export function toMktSegId(exchange: string, instrumentType?: string, segment?: string): number {
+  const ex  = (exchange      ?? '').toUpperCase();
+  const it  = (instrumentType ?? '').toUpperCase();
+  const seg = (segment        ?? '').toUpperCase();
+  const isFO  = ['FUTIDX','FUTSTK','OPTIDX','OPTSTK','CE','PE','FUT'].includes(it) || seg === 'FO';
+  const isCUR = seg === 'CD' || seg === 'CUR' || it === 'CUR';
+  if (ex === 'BSE') return isFO ? 4 : 8;   // BSE_FO=4, BSE_EQ=8
   if (ex === 'MCX') return 5;
-  return isFO ? 2 : 1; // NSE default
+  if (isCUR)        return 3;               // NSE_CUR=3
+  return isFO ? 2 : 1;                      // NSE_FO=2, NSE_EQ=1
 }
 
 export function ReligareChart({
