@@ -7,8 +7,8 @@ const TOOL_GROUPS: { title: string; col: string; tools: { label: string; icon: E
   {
     title: 'Trading Tools', col: '41,121,255',
     tools: [
-      { label:'Option Chain',      icon:BarChart2,    href:'/markets?tab=option-chain', desc:'Live OI, IV, Greeks' },
-      { label:'Strategy Builder',  icon:Layers,       href:'/markets?tab=strategies',   desc:'Build option strategies' },
+      { label:'Option Chain',      icon:BarChart2,    href:'/?tab=option-chain', desc:'Live OI, IV, Greeks' },
+      { label:'Strategy Builder',  icon:Layers,       href:'/?tab=strategies',   desc:'Build option strategies' },
       { label:'OI Charts',         icon:Activity,     href:'#',                         desc:'Open interest analysis' },
       { label:'IV Chart',          icon:TrendingUp,   href:'#',                         desc:'Implied volatility trends' },
       { label:'Greeks Calculator', icon:Calculator,   href:'/tools/calculators',        desc:'Delta, Gamma, Theta, Vega' },
@@ -27,7 +27,7 @@ const TOOL_GROUPS: { title: string; col: string; tools: { label: string; icon: E
       { label:'Stock Screener',    icon:Filter,       href:'/tools/screener',             desc:'Filter stocks by criteria' },
       { label:'Options Screener',  icon:Filter,       href:'#',                           desc:'Screen option contracts' },
       { label:'Market Heatmap',    icon:PieChart,     href:'/tools/heatmap',              desc:'Visualize market movement' },
-      { label:'Sector Heatmap',    icon:PieChart,     href:'/markets?tab=composition',    desc:'Sector performance map' },
+      { label:'Sector Heatmap',    icon:PieChart,     href:'/?tab=composition',    desc:'Sector performance map' },
       { label:'Technical Signals', icon:Zap,          href:'#',                           desc:'RSI, MACD signals' },
       { label:'Event Calendar',    icon:Calendar,     href:'/tools/calendar',             desc:'Upcoming market events' },
       { label:'Earnings Calendar', icon:Calendar,     href:'/tools/calendar',             desc:'Company results schedule' },

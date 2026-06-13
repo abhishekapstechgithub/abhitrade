@@ -153,7 +153,7 @@ export default function PositionsPage() {
                               <div className="hidden group-hover:flex items-center gap-1">
                                 <button onClick={() => openOrderPanel(pos.tradingsymbol, netQty > 0 ? 'SELL' : 'BUY')}
                                   className="px-2 py-1 rounded text-[10px] font-semibold" style={{ background: 'rgba(var(--loss-rgb),0.15)', color: 'var(--accent-red)' }}>Exit</button>
-                                <Link href="/markets?tab=charts">
+                                <Link href="/?tab=charts">
                                   <button className="p-1 rounded" style={{ color: 'var(--accent-blue)' }}><BarChart2 size={12} /></button>
                                 </Link>
                               </div>

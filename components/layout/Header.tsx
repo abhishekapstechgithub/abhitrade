@@ -24,7 +24,7 @@ const TOKEN_LABELS: Record<string, string> = {
 };
 
 const NAV_LINKS = [
-  { id: 'markets',   label: 'Markets',   href: '/markets',   hasMenu: true },
+  { id: 'markets',   label: 'Markets',   href: '/',          hasMenu: true },
   { id: 'watchlist', label: 'Watchlist', href: '/watchlist' },
   { id: 'portfolio', label: 'Portfolio', href: '/portfolio' },
   { id: 'orders',    label: 'Orders',    href: '/orders' },
@@ -34,10 +34,10 @@ const NAV_LINKS = [
 
 // Quick-action menu shown on chip hover
 const CHIP_ACTIONS = [
-  { label: 'Option Chain',       href: '/markets?tab=option-chain', Icon: BarChart2 },
-  { label: 'Charts',             href: '/markets?tab=charts',       Icon: Activity  },
-  { label: 'Stock Composition',  href: '/markets?tab=composition',  Icon: PieChart  },
-  { label: 'Favourite Strategies', href: '/markets?tab=strategies', Icon: Star      },
+  { label: 'Option Chain',       href: '/?tab=option-chain', Icon: BarChart2 },
+  { label: 'Charts',             href: '/?tab=charts',       Icon: Activity  },
+  { label: 'Stock Composition',  href: '/?tab=composition',  Icon: PieChart  },
+  { label: 'Favourite Strategies', href: '/?tab=strategies', Icon: Star      },
 ];
 
 // ── useOutsideClick ────────────────────────────────────────────────────────────
@@ -229,7 +229,7 @@ export function Header() {
 
               {/* Footer */}
               <div className="px-4 py-2.5 border-t text-center" style={{ borderColor: 'var(--panel-divider)' }}>
-                <Link href="/markets" onClick={() => setIndicesListOpen(false)}
+                <Link href="/" onClick={() => setIndicesListOpen(false)}
                   className="text-[11px] font-bold uppercase tracking-widest hover:opacity-75 transition-opacity"
                   style={{ color: 'var(--accent-cyan)' }}>
                   VIEW ALL INDICES

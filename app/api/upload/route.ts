@@ -4,7 +4,7 @@ import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { isRedisAvailable, redis, KEYS } from '@/lib/redis-client';
-import { loadFileIntoMongo, type FileType } from '@/lib/mongo-security-loader';
+import { loadFileIntoDb, type FileType } from '@/lib/security-loader';
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR ?? join(process.cwd(), 'tmp', 'uploads');
 const VALID_FILE_TYPES: FileType[] = ['NSE_CM', 'BSE_CM', 'NSE_FO', 'BSE_FO'];
@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
     // Fire-and-forget processing
     setImmediate(async () => {
       try {
-        await loadFileIntoMongo(filePath, file.name, fileType as FileType, jobId, overwrite);
+        await loadFileIntoDb(filePath, file.name, fileType as FileType, jobId, overwrite);
       } catch (e) {
         console.error('[upload] loader error:', e);
         const msg = e instanceof Error ? e.message : String(e);

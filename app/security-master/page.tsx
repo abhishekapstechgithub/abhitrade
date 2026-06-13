@@ -645,24 +645,23 @@ export default function SecurityMasterPage() {
   const [uploading, setUploading]     = useState(false);
   const [activeJob, setActiveJob]     = useState<JobStatus | null>(null);
   const [jobHistory, setJobHistory]   = useState<JobStatus[]>([]);
-  const [mongoStatus, setMongoStatus] = useState<'checking' | 'ok' | 'error'>('checking');
+  const [dbStatus, setDbStatus] = useState<'checking' | 'ok' | 'error'>('checking');
   const fileRef  = useRef<HTMLInputElement>(null);
   const pollRef  = useRef<NodeJS.Timeout | null>(null);
 
-  // Check MongoDB reachability via health endpoint
-  const checkMongo = useCallback(async () => {
+  const checkDb = useCallback(async () => {
     try {
       const r = await fetch('/api/health');
       const d = await r.json();
-      setMongoStatus(d.mongo === 'ok' ? 'ok' : 'error');
-    } catch { setMongoStatus('error'); }
+      setDbStatus(d.services?.postgres_live === 'connected' ? 'ok' : 'error');
+    } catch { setDbStatus('error'); }
   }, []);
 
   useEffect(() => {
-    checkMongo();
-    const id = setInterval(checkMongo, 20_000);
+    checkDb();
+    const id = setInterval(checkDb, 20_000);
     return () => clearInterval(id);
-  }, [checkMongo]);
+  }, [checkDb]);
 
   // Poll job status
   const startPolling = useCallback((jobId: string) => {
@@ -738,11 +737,11 @@ export default function SecurityMasterPage() {
             <p className="text-sm text-gray-500 mt-0.5">Upload security master files and EOD bhavcopy prices</p>
           </div>
           <div className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-medium border
-            ${mongoStatus === 'ok' ? 'bg-green-50 border-green-200 text-green-700' :
-              mongoStatus === 'error' ? 'bg-red-50 border-red-200 text-red-600' :
+            ${dbStatus === 'ok' ? 'bg-green-50 border-green-200 text-green-700' :
+              dbStatus === 'error' ? 'bg-red-50 border-red-200 text-red-600' :
               'bg-gray-50 border-gray-200 text-gray-500'}`}>
             <Database size={12} />
-            {mongoStatus === 'ok' ? 'MongoDB Connected' : mongoStatus === 'error' ? 'MongoDB Offline' : 'Checking…'}
+            {dbStatus === 'ok' ? 'PostgreSQL Connected' : dbStatus === 'error' ? 'PostgreSQL Offline' : 'Checking…'}
           </div>
         </div>
 

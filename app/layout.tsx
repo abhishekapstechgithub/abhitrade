@@ -16,7 +16,7 @@ export const metadata: Metadata = {
 };
 
 // Hidden prefetch links — pre-warms all page routes in the background so they compile before the user clicks
-const PREFETCH_ROUTES = ['/watchlist','/portfolio','/orders','/positions','/markets','/tools','/profile','/security-master'];
+const PREFETCH_ROUTES = ['/watchlist','/portfolio','/orders','/positions','/tools','/profile','/security-master'];
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -25,7 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         {/* Inline script to set data-theme before first paint — prevents flash of wrong theme */}
         <script dangerouslySetInnerHTML={{ __html: `
   try {
-    var t = localStorage.getItem('at-theme') || 'dark';
+    var t = localStorage.getItem('at-theme') || 'light';
     var resolved = t === 'system' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : t;
     document.documentElement.setAttribute('data-theme', resolved);
     var f = localStorage.getItem('at-fontsize') || 'normal';

@@ -177,7 +177,7 @@ export function GlobalSearch() {
                     <button
                       onClick={() => { openOrderPanel(r.symbol, 'SELL'); setSearchOpen(false); }}
                       className="px-2 py-1 text-xs bg-red-600 text-white rounded-md hover:bg-red-700">S</button>
-                    <Link href="/markets?tab=charts" onClick={() => setSearchOpen(false)}
+                    <Link href="/?tab=charts" onClick={() => setSearchOpen(false)}
                       className="p-1 text-gray-500 hover:text-blue-600 rounded-md hover:bg-blue-50">
                       <BarChart2 size={14} />
                     </Link>

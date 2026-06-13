@@ -7,8 +7,10 @@ import {
   MoreVertical, Maximize2, Minus,
   ArrowDownToLine, LayoutGrid, Table as TableIcon,
   Filter, Columns, ChevronsUpDown,
+  Sun, Moon, Zap, ExternalLink,
 } from 'lucide-react';
 import { useUIStore } from '@/store/useUIStore';
+import { useTheme } from '@/components/theme/ThemeProvider';
 import { formatNumber, formatPercent, formatVolume } from '@/lib/utils/format';
 import type { WatchlistItem, OptionContract } from '@/types';
 import { useAngelOnePrices } from '@/hooks/useAngelOneWs';
@@ -447,26 +449,28 @@ function CompactRow({
 // ─── LEFT PANEL (Watchlist | Docked OC) ──────────────────────────────────────
 
 interface LeftPanelProps {
-  items:         WatchlistItem[];
-  activeWL:      number;
-  setActiveWL:   (i: number) => void;
-  selectedId:    string | null;
-  onSelect:      (item: WatchlistItem) => void;
-  onAdd:         (item: WatchlistItem) => void;
-  onRemove:      (id: string) => void;
-  docked:        boolean;
-  onUndock:      () => void;
-  ocSymbol:      string;
-  setOcSymbol:   (s: string) => void;
-  ocExpiry:      string;
-  setOcExpiry:   (e: string) => void;
-  onHide?:       () => void;
+  items:           WatchlistItem[];
+  activeWL:        number;
+  setActiveWL:     (i: number) => void;
+  selectedId:      string | null;
+  onSelect:        (item: WatchlistItem) => void;
+  onAdd:           (item: WatchlistItem) => void;
+  onRemove:        (id: string) => void;
+  docked:          boolean;
+  onUndock:        () => void;
+  ocSymbol:        string;
+  setOcSymbol:     (s: string) => void;
+  ocExpiry:        string;
+  setOcExpiry:     (e: string) => void;
+  onHide?:         () => void;
+  onSwitchToTable?:() => void;
 }
 
 function LeftPanel({
   items, activeWL, setActiveWL, selectedId, onSelect,
   onAdd, onRemove,
   docked, onUndock, ocSymbol, setOcSymbol, ocExpiry, setOcExpiry, onHide,
+  onSwitchToTable,
 }: LeftPanelProps) {
   const { openOrderPanel } = useUIStore();
   const [search, setSearch]             = useState('');
@@ -541,9 +545,9 @@ function LeftPanel({
     <div className="flex flex-col h-full"
       style={{ background: 'var(--panel-bg)', borderRight: '1px solid var(--panel-divider)' }}>
 
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 shrink-0"
-        style={{ borderBottom: '1px solid var(--panel-divider)' }}>
+      {/* Header — height matches tab bar so they align on the same row */}
+      <div className="flex items-center justify-between px-3 shrink-0"
+        style={{ height: 40, borderBottom: '1px solid var(--panel-divider)' }}>
         {docked ? (
           <div className="flex items-center gap-1">
             <button className="text-[11px] font-semibold px-2 py-1 rounded"
@@ -564,6 +568,13 @@ function LeftPanel({
             <button title="Undock" onClick={onUndock}
               className="p-1 rounded hover:opacity-70" style={{ color: 'var(--text-label)' }}>
               <ArrowDownToLine size={12} />
+            </button>
+          )}
+          {onSwitchToTable && (
+            <button title="Table mode" onClick={onSwitchToTable}
+              className="p-1 rounded hover:opacity-70 transition-colors"
+              style={{ color: 'var(--text-label)' }}>
+              <TableIcon size={13} />
             </button>
           )}
           <button className="p-1 rounded hover:opacity-70" style={{ color: 'var(--text-label)' }}>
@@ -1091,14 +1102,13 @@ interface CenterPanelProps {
   setOcExpiry:       (e: string) => void;
   onDockOc:          () => void;
   chartTheme:        'light' | 'dark';
-  onChartThemeChange:(t: 'light' | 'dark') => void;
   activeTab:         CenterTab;
 }
 
 function CenterPanel({
   selectedItem, showOcOverlay, onToggleOcOverlay,
   ocSymbol, setOcSymbol, ocExpiry, setOcExpiry, onDockOc,
-  chartTheme, onChartThemeChange, activeTab,
+  chartTheme, activeTab,
 }: CenterPanelProps) {
   const isDark = chartTheme === 'dark';
 
@@ -1123,7 +1133,7 @@ function CenterPanel({
           </div>
         ) : activeTab === 'chart' ? (
           <ReligareChart
-            key={`${selectedItem.id}-${selectedItem.exchange}`}
+            key={`${selectedItem.id}-${selectedItem.exchange}-${chartTheme}`}
             token={selectedItem.id}
             mktsegid={toMktSegId(selectedItem.exchange, selectedItem.instrumentType, (selectedItem as any).segment)}
             theme={chartTheme}
@@ -1164,49 +1174,74 @@ interface RightDockProps {
 
 function RightDock({ activePanel, onToggle, onToggleOc, watchlistVisible, onToggleWatchlist }: RightDockProps) {
   const sidePanels: Array<{ panel: 'positions' | 'orders' | 'depth'; icon: React.ReactNode; label: string }> = [
-    { panel: 'positions', icon: <TrendingUp size={16} />, label: 'Positions' },
-    { panel: 'orders',    icon: <FileText size={16} />,   label: 'Orders'    },
-    { panel: 'depth',     icon: <BarChart2 size={16} />,  label: 'Market Depth' },
+    { panel: 'positions', icon: <TrendingUp size={15} />, label: 'Positions'    },
+    { panel: 'orders',    icon: <FileText size={15} />,   label: 'Orders'       },
+    { panel: 'depth',     icon: <BarChart2 size={15} />,  label: 'Market Depth' },
   ];
 
-  return (
-    <div className="flex flex-col items-center py-3 gap-1 shrink-0"
-      style={{ width: 48, background: 'var(--panel-bg)', borderLeft: '1px solid var(--panel-divider)' }}>
+  const btnBase: React.CSSProperties = {
+    width: 36, height: 36,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    borderRadius: 10,
+    cursor: 'pointer',
+    transition: 'background 0.15s, color 0.15s, box-shadow 0.15s',
+    border: 'none',
+  };
+  const btnIdle: React.CSSProperties = {
+    ...btnBase,
+    background: 'transparent',
+    color: 'var(--text-dim)',
+  };
+  const btnActive: React.CSSProperties = {
+    ...btnBase,
+    background: 'rgba(79,70,229,0.15)',
+    color: '#4f46e5',
+    boxShadow: '0 0 0 1px rgba(79,70,229,0.3)',
+  };
 
-      {/* Watchlist toggle */}
-      <button key="watchlist" title={watchlistVisible ? 'Hide Watchlist' : 'Show Watchlist'}
+  return (
+    <div className="flex flex-col items-center shrink-0"
+      style={{
+        width: 48,
+        paddingTop: 10,
+        paddingBottom: 10,
+        gap: 4,
+        background: 'var(--panel-bg)',
+        borderLeft: '1px solid var(--panel-divider)',
+      }}>
+
+      {/* ── Watchlist toggle ── */}
+      <button title={watchlistVisible ? 'Hide Watchlist' : 'Show Watchlist'}
         onClick={onToggleWatchlist}
-        className="w-9 h-9 flex items-center justify-center rounded-lg transition-all"
-        style={watchlistVisible
-          ? { background: 'rgba(79,70,229,0.2)', color: '#4f46e5', border: '1px solid rgba(79,70,229,0.3)' }
-          : { color: 'var(--text-dim)', border: '1px solid transparent' }}>
-        <List size={16} />
+        style={watchlistVisible ? btnActive : btnIdle}>
+        <List size={15} />
       </button>
 
-      <div className="w-6 my-1" style={{ borderBottom: '1px solid var(--panel-divider)' }} />
+      {/* divider */}
+      <div style={{ width: 24, height: 1, background: 'var(--panel-divider)', margin: '4px 0' }} />
 
+      {/* ── Side panels ── */}
       {sidePanels.map(({ panel, icon, label }) => (
-        <button key={label} title={label}
+        <button key={panel} title={label}
           onClick={() => onToggle(panel)}
-          className="w-9 h-9 flex items-center justify-center rounded-lg transition-all"
-          style={activePanel === panel
-            ? { background: 'rgba(79,70,229,0.2)', color: '#4f46e5', border: '1px solid rgba(79,70,229,0.3)' }
-            : { color: 'var(--text-dim)', border: '1px solid transparent' }}>
+          style={activePanel === panel ? btnActive : btnIdle}>
           {icon}
         </button>
       ))}
 
-      <div className="w-6 my-1" style={{ borderBottom: '1px solid var(--panel-divider)' }} />
+      {/* divider */}
+      <div style={{ width: 24, height: 1, background: 'var(--panel-divider)', margin: '4px 0' }} />
 
-      <button title="Option Chain" onClick={onToggleOc}
-        className="w-9 h-9 flex items-center justify-center rounded-lg transition-all hover:opacity-80"
-        style={{ color: 'var(--text-dim)', border: '1px solid transparent' }}>
-        <Link2 size={16} />
+      {/* ── Option chain ── */}
+      <button title="Option Chain" onClick={onToggleOc} style={btnIdle}>
+        <Link2 size={15} />
       </button>
-      <button title="More"
-        className="w-9 h-9 flex items-center justify-center rounded-lg hover:opacity-80"
-        style={{ color: 'var(--text-dim)' }}>
-        <MoreVertical size={16} />
+
+      <div style={{ flex: 1 }} />
+
+      {/* ── More (bottom) ── */}
+      <button title="More" style={btnIdle}>
+        <MoreVertical size={15} />
       </button>
     </div>
   );
@@ -1224,7 +1259,7 @@ interface ChartModeProps {
   initialSymbol?:  WatchlistItem | null;
 }
 
-function ChartMode({ items, activeWL, setActiveWL, onAdd, onRemove, initialSymbol }: ChartModeProps) {
+function ChartMode({ items, activeWL, setActiveWL, onAdd, onRemove, onSwitchToTable, initialSymbol }: ChartModeProps) {
   const initItem = initialSymbol ?? items[0] ?? null;
   const [selectedItem, setSelectedItem]   = useState<WatchlistItem | null>(initItem);
   const [dockOc, setDockOc]               = useState(false);
@@ -1233,12 +1268,15 @@ function ChartMode({ items, activeWL, setActiveWL, onAdd, onRemove, initialSymbo
   const [ocSymbol, setOcSymbol]           = useState('NIFTY');
   const [ocExpiry, setOcExpiry]           = useState(EXPIRIES[0]);
   const [showWatchlist, setShowWatchlist] = useState(true);
-  const [chartTheme, setChartTheme]       = useState<'light' | 'dark'>('light');
   const [activeTab, setActiveTab]         = useState<CenterTab>('chart');
+
+  // Sync chart theme with global app theme automatically
+  const { theme: globalTheme, setTheme } = useTheme();
+  const chartTheme = (globalTheme === 'dark' || (globalTheme === 'system' && typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches)) ? 'dark' : 'light';
+  const isDark = chartTheme === 'dark';
 
   const CENTER_TABS: Array<{ key: CenterTab; label: string }> = [
     { key: 'chart',       label: 'Chart'             },
-    { key: 'overview',    label: 'Overview'          },
     { key: 'optionchain', label: 'Option Chain'      },
     { key: 'composition', label: 'Stock Composition' },
   ];
@@ -1252,35 +1290,65 @@ function ChartMode({ items, activeWL, setActiveWL, onAdd, onRemove, initialSymbo
   }
 
   return (
-    <div className="flex flex-col h-full">
-      {/* ── Tab bar + SCALPER MODE (matches Image #4 layout) ── */}
-      <div className="flex items-center gap-0.5 px-3 shrink-0"
-        style={{ height: 40, borderBottom: '1px solid var(--panel-divider)', background: 'var(--panel-bg)' }}>
-        {CENTER_TABS.map(t => (
-          <button key={t.key}
-            onClick={() => { setActiveTab(t.key); if (t.key === 'optionchain') setShowOcOverlay(p => !p); }}
-            className="px-3 h-full text-[11px] font-medium transition-all relative"
-            style={activeTab === t.key
-              ? { color: '#4f46e5', borderBottom: '2px solid #4f46e5' }
-              : { color: 'var(--text-label)', borderBottom: '2px solid transparent' }}>
-            {t.label}
-          </button>
-        ))}
-        <div className="flex-1" />
-        <button className="text-[10px] font-bold px-3 py-1.5 rounded-lg hover:opacity-80 shrink-0"
-          style={{ background: 'rgba(79,70,229,0.15)', color: '#4f46e5', border: '1px solid rgba(79,70,229,0.3)' }}>
-          SCALPER MODE
-        </button>
-        <button className="p-1.5 rounded-lg ml-1 hover:opacity-70 shrink-0"
-          style={{ color: '#64748b', border: '1px solid var(--panel-divider)' }}>
-          <Maximize2 size={13} />
-        </button>
-      </div>
+    <div className="flex h-full">
 
-      {/* ── Main area: chart + panels + watchlist ── */}
-      <div className="flex flex-1 min-h-0">
-        {/* Center chart — takes all remaining space */}
-        <div className="flex-1 min-w-0">
+      {/* ── LEFT: tab bar + chart (column) ── */}
+      <div className="flex-1 min-w-0 flex flex-col">
+
+        {/* Tab bar — spans chart width only */}
+        <div className="flex items-center shrink-0"
+          style={{ height: 40, borderBottom: '1px solid var(--panel-divider)', background: 'var(--panel-bg)', paddingLeft: 8, paddingRight: 8 }}>
+
+          {/* Theme toggle — far left before tabs */}
+          <button
+            title={isDark ? 'Switch to Light' : 'Switch to Dark'}
+            onClick={() => setTheme(isDark ? 'light' : 'dark')}
+            className="flex items-center justify-center rounded-lg mr-2 shrink-0 transition-all hover:scale-105"
+            style={{
+              width: 28, height: 28,
+              background: isDark ? 'rgba(251,191,36,0.12)' : 'rgba(99,102,241,0.1)',
+              color: isDark ? '#fbbf24' : '#6366f1',
+              border: isDark ? '1px solid rgba(251,191,36,0.3)' : '1px solid rgba(99,102,241,0.25)',
+            }}>
+            {isDark ? <Sun size={13} /> : <Moon size={13} />}
+          </button>
+
+          {/* Tabs */}
+          {CENTER_TABS.map(t => (
+            <button key={t.key}
+              onClick={() => { setActiveTab(t.key); if (t.key === 'optionchain') setShowOcOverlay(p => !p); }}
+              className="px-3 h-10 text-[11px] font-medium transition-all relative whitespace-nowrap"
+              style={activeTab === t.key
+                ? { color: '#4f46e5', borderBottom: '2px solid #4f46e5' }
+                : { color: 'var(--text-label)', borderBottom: '2px solid transparent' }}>
+              {t.label}
+            </button>
+          ))}
+
+          <div className="flex-1" />
+
+          {/* SCALPER MODE — styled like Image #27 */}
+          <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg mr-1.5 text-[11px] font-bold transition-all hover:opacity-90 shrink-0"
+            style={{
+              background: 'linear-gradient(135deg, rgba(79,70,229,0.18) 0%, rgba(124,58,237,0.18) 100%)',
+              color: '#4f46e5',
+              border: '1px solid rgba(79,70,229,0.35)',
+              boxShadow: '0 1px 4px rgba(79,70,229,0.15)',
+            }}>
+            <Zap size={11} strokeWidth={2.5} />
+            SCALPER MODE
+            <ExternalLink size={10} strokeWidth={2} style={{ opacity: 0.7 }} />
+          </button>
+
+          {/* Maximize */}
+          <button className="flex items-center justify-center rounded-lg transition-all hover:opacity-80 shrink-0"
+            style={{ width: 28, height: 28, color: 'var(--text-dim)', border: '1px solid var(--panel-divider)' }}>
+            <Maximize2 size={13} />
+          </button>
+        </div>
+
+        {/* Chart content */}
+        <div className="flex-1 min-h-0">
           <CenterPanel
             selectedItem={selectedItem}
             showOcOverlay={showOcOverlay}
@@ -1289,12 +1357,12 @@ function ChartMode({ items, activeWL, setActiveWL, onAdd, onRemove, initialSymbo
             ocExpiry={ocExpiry} setOcExpiry={setOcExpiry}
             onDockOc={() => setDockOc(true)}
             chartTheme={chartTheme}
-            onChartThemeChange={setChartTheme}
             activeTab={activeTab}
           />
         </div>
+      </div>
 
-      {/* Optional side panels (Positions, Orders, Depth) */}
+      {/* Optional side panels */}
       {activePanel && (
         <div style={{ width: 300, flexShrink: 0, overflow: 'hidden', borderLeft: '1px solid var(--panel-divider)' }}>
           {activePanel === 'positions' && <PositionsPanel onClose={() => setActivePanel(null)} />}
@@ -1312,7 +1380,7 @@ function ChartMode({ items, activeWL, setActiveWL, onAdd, onRemove, initialSymbo
         onToggleWatchlist={() => setShowWatchlist(p => !p)}
       />
 
-      {/* Watchlist panel — RIGHT side, toggleable */}
+      {/* ── RIGHT: Watchlist (header aligns with tab bar row) ── */}
       {showWatchlist && (
         <div style={{ width: 280, flexShrink: 0, borderLeft: '1px solid var(--panel-divider)' }}>
           <LeftPanel
@@ -1328,11 +1396,11 @@ function ChartMode({ items, activeWL, setActiveWL, onAdd, onRemove, initialSymbo
             ocSymbol={ocSymbol} setOcSymbol={setOcSymbol}
             ocExpiry={ocExpiry} setOcExpiry={setOcExpiry}
             onHide={() => setShowWatchlist(false)}
+            onSwitchToTable={onSwitchToTable}
           />
         </div>
       )}
     </div>
-  </div>
   );
 }
 
@@ -1393,27 +1461,6 @@ export default function WatchlistPage() {
       flexDirection: 'column',
       overflow:      'hidden',
     }}>
-      <div className="flex items-center justify-end gap-2 px-3 py-1.5 shrink-0"
-        style={{ borderBottom: '1px solid var(--panel-divider)', background: 'var(--panel-bg)' }}>
-        <span className="text-[11px] mr-auto" style={{ color: 'var(--text-label)' }}>
-          {items.length > 0 ? `${items.length} instruments` : 'Search to add scrips'}
-        </span>
-        <button title="Chart mode" onClick={() => setViewMode('chart')}
-          className="p-1.5 rounded-lg transition-all"
-          style={viewMode === 'chart'
-            ? { background: 'rgba(79,70,229,0.15)', color: '#4f46e5', border: '1px solid rgba(79,70,229,0.3)' }
-            : { color: 'var(--text-label)', border: '1px solid var(--panel-divider)' }}>
-          <LayoutGrid size={14} />
-        </button>
-        <button title="Table mode" onClick={() => setViewMode('table')}
-          className="p-1.5 rounded-lg transition-all"
-          style={viewMode === 'table'
-            ? { background: 'rgba(79,70,229,0.15)', color: '#4f46e5', border: '1px solid rgba(79,70,229,0.3)' }
-            : { color: 'var(--text-label)', border: '1px solid var(--panel-divider)' }}>
-          <TableIcon size={14} />
-        </button>
-      </div>
-
       <div className="flex-1 min-h-0 overflow-hidden">
         {viewMode === 'table' ? (
           <TableView

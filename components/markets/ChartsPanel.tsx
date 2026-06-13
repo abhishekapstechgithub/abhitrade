@@ -107,7 +107,7 @@ export function ChartsPanel() {
         <ReligareChart
           key={`${selected.token}-${selected.exchange}`}
           token={selected.token}
-          mktsegid={mktsegid}
+          mktsegid={toMktSegId(selected.exchange, selected.instrumentType, selected.segment)}
           theme="light"
           interval="DAY"
         />

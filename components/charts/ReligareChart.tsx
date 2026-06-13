@@ -1,5 +1,9 @@
 'use client';
 
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useDevToolsDetection } from '@/hooks/useDevToolsDetection';
+
 interface Props {
   token:        string;
   mktsegid?:    number;  // 1=NSE CM, 2=NSE FO, 3=BSE CM, 4=BSE FO
@@ -44,10 +48,24 @@ export function ReligareChart({
   interval  = 'MIN',
   chartStyle = 'line',
 }: Props) {
+  const router       = useRouter();
+  const devToolsOpen = useDevToolsDetection();
+  // Unique timestamp captured at mount time — forces browser to bypass cache on each remount
+  // (key-prop change causes remount, so this always gets a fresh value when theme/symbol changes)
+  const [mountId] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (devToolsOpen) router.replace('/');
+  }, [devToolsOpen, router]);
+
+  if (devToolsOpen) return null;
+
   // Remap AngelOne index virtual tokens → actual Religare tokens
   const mapped = ANGEL_TO_RELIGARE[token];
   const resolvedToken    = mapped ? mapped.token    : token;
   const resolvedMktsegid = mapped ? mapped.mktsegid : mktsegid;
+
+  const themeParam = theme === 'dark' ? 'n' : 'd';
 
   const params = new URLSearchParams({
     ver:        'v1',
@@ -66,17 +84,17 @@ export function ReligareChart({
     headsup:    'y',
     buysell:    'y',
     lookup:     'y',
-    theme:      theme === 'dark' ? 'd' : 'l',
+    theme:      themeParam,
     span:       '',
     continuous: '',
     group:      'g1',
     apikey:     API_KEY,
     userid:     'test4',
+    _cb:        String(mountId),  // cache-buster: new value on every remount
   });
 
   return (
     <iframe
-      key={`${resolvedToken}-${resolvedMktsegid}-${interval}-${theme}`}
       src={`${BASE}?${params.toString()}`}
       style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
       allowFullScreen

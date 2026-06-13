@@ -16,34 +16,11 @@ version: '3.9'
 #
 #  Network topology:
 #    Internet → Nginx (proxy-net, 80/443) → app:3000 (proxy-net + app-net)
-#    app ↔ redis, postgres, mongodb, market-sync  (app-net)
+#    app ↔ redis, postgres, market-sync  (app-net)
 #    postgres ↔ redis  (db-net, internal-only)
 # ────────────────────────────────────────────────────────────────────────────
 
 services:
-
-  # ── MongoDB (historical OHLCV — tradechart collection) ────────────────────
-  mongodb:
-    image: mongo:7-jammy
-    container_name: abhitrade-mongodb
-    ports:
-      - '27017:27017'
-    volumes:
-      - mongodb_data:/data/db
-    restart: unless-stopped
-    healthcheck:
-      test: ['CMD', 'mongosh', '--eval', "db.adminCommand('ping')", '--quiet']
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    networks:
-      - app-net
-    deploy:
-      resources:
-        limits:
-          memory: 1g
-          cpus: '0.5'
 
   # ── PostgreSQL ─────────────────────────────────────────────────────────────
   postgres:
@@ -105,18 +82,14 @@ services:
           cpus: '0.25'
 
   # ── Market-sync worker (placeholder) ─────────────────────────────────────
-  # NOTE: This service is aspirational. lib/market-sync.ts exports
-  # runMarketSync and scheduleMarketSync but not a standalone startMarketSync.
-  # The worker runs inside the Next.js app via scheduleMarketSync() called
-  # from instrumentation.ts. This container is a placeholder for a future
-  # standalone TypeScript worker that compiles and runs independently.
+  # NOTE: This service is aspirational. The worker runs inside the Next.js app
+  # via scheduleMarketSync() called from instrumentation.ts.
   market-sync:
     image: node:18-alpine
     container_name: abhitrade-market-sync
     working_dir: /app/worker
     volumes:
       - ./lib/market-sync.ts:/app/worker/lib/market-sync.ts:ro
-      - ./lib/mongodb.ts:/app/worker/lib/mongodb.ts:ro
       - ./lib/redis.ts:/app/worker/lib/redis.ts:ro
       - ./package.json:/app/worker/package.json:ro
       - ./package-lock.json:/app/worker/package-lock.json:ro
@@ -127,11 +100,8 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-      - MONGO_URI=mongodb://mongodb:27017/abhitrade
     depends_on:
       redis:
-        condition: service_healthy
-      mongodb:
         condition: service_healthy
     restart: unless-stopped
     networks:
@@ -203,14 +173,11 @@ services:
       - ANGELONE_CLIENT_ID=${ANGELONE_CLIENT_ID:-}
       - ANGELONE_PASSWORD=${ANGELONE_PASSWORD:-}
       - ANGELONE_TOTP_SECRET=${ANGELONE_TOTP_SECRET:-}
-      - MONGODB_URI=mongodb://mongodb:27017
-      - MONGODB_DB=${MONGODB_DB:-abhitrade}
+      - RELIGARE_API_KEY=${RELIGARE_API_KEY:-}
     depends_on:
       redis:
         condition: service_healthy
       postgres:
-        condition: service_healthy
-      mongodb:
         condition: service_healthy
     restart: unless-stopped
     stop_grace_period: 5s
@@ -283,8 +250,6 @@ volumes:
     driver: local
   redis_data:
     driver: local
-  mongodb_data:
-    driver: local
   uploads:
     driver: local
   bhavcopy_data:
@@ -298,7 +263,7 @@ networks:
     driver: bridge
     name: abhitrade-proxy-net
 
-  # app ↔ redis, postgres, mongodb, market-sync
+  # app ↔ redis, postgres, market-sync
   app-net:
     driver: bridge
     name: abhitrade-app-net

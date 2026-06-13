@@ -16,11 +16,19 @@ COMPOSE_FILE="${1:-docker-compose.yml}"
 
 CERT_DIR="./certbot/conf/live/$DOMAIN"
 
+# ── Detect docker compose command (v2 plugin vs v1 standalone) ───────────────
+if docker compose version > /dev/null 2>&1; then
+  DC="docker compose"
+else
+  DC="docker-compose"
+fi
+
 echo ""
 echo "══════════════════════════════════════════════════════"
 echo "  TradeKaro — Let's Encrypt SSL Setup"
 echo "  Domain : $DOMAIN"
 echo "  Email  : $EMAIL"
+echo "  Compose: $DC"
 echo "══════════════════════════════════════════════════════"
 echo ""
 
@@ -45,7 +53,7 @@ fi
 
 # ── Step 2: Start nginx (with dummy cert so it can serve ACME challenge) ─────
 echo "[2/5] Starting nginx..."
-docker-compose -f "$COMPOSE_FILE" up -d nginx
+$DC -f "$COMPOSE_FILE" up -d nginx
 echo "      Waiting 5s for nginx to be ready..."
 sleep 5
 
@@ -54,16 +62,20 @@ echo "[3/5] Testing HTTP reachability at http://$DOMAIN ..."
 if ! curl -s --max-time 10 "http://$DOMAIN/.well-known/acme-challenge/test" > /dev/null 2>&1; then
   echo ""
   echo "  WARNING: http://$DOMAIN is not reachable."
-  echo "  Make sure your DNS A record for $DOMAIN points to this server's IP"
-  echo "  and port 80 is open in your firewall before continuing."
+  echo "  Make sure:"
+  echo "    1. DNS A record for $DOMAIN points to this server's IP"
+  echo "    2. Port 80 is open in your firewall/security group"
+  echo "    3. No other process is on port 80"
   echo ""
   read -rp "  Continue anyway? (y/N): " answer
   [[ "$answer" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 1; }
 fi
 
 # ── Step 4: Get real Let's Encrypt certificate ────────────────────────────────
+# --entrypoint certbot overrides the renewal-loop entrypoint defined in compose
 echo "[4/5] Requesting Let's Encrypt certificate (webroot method)..."
-docker-compose -f "$COMPOSE_FILE" run --rm certbot certonly \
+echo "      This may take up to 60 seconds..."
+$DC -f "$COMPOSE_FILE" run --rm --entrypoint certbot certbot certonly \
   --webroot \
   --webroot-path=/var/www/certbot \
   --email "$EMAIL" \
@@ -75,7 +87,7 @@ docker-compose -f "$COMPOSE_FILE" run --rm certbot certonly \
 
 # ── Step 5: Restart nginx so it re-runs the startup command with the real cert ─
 echo "[5/5] Restarting nginx to activate HTTPS..."
-docker-compose -f "$COMPOSE_FILE" restart nginx
+$DC -f "$COMPOSE_FILE" restart nginx
 
 echo ""
 echo "══════════════════════════════════════════════════════"

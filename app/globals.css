@@ -205,7 +205,7 @@ html, body {
 
 /* ── Light theme overrides ─────────────────────── */
 [data-theme="light"] {
-  --bg-base:       #f1f5f9;
+  --bg-base:       #fafafa;
   --bg-surface:    #ffffff;
   --bg-card:       rgba(255,255,255,0.95);
   --border-dim:    rgba(0,0,0,0.08);

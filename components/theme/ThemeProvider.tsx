@@ -10,7 +10,7 @@ interface ThemeContextType {
 }
 
 const ThemeContext = createContext<ThemeContextType>({
-  theme: 'dark',
+  theme: 'light',
   setTheme: () => {},
 });
 
@@ -22,7 +22,7 @@ function resolveTheme(theme: ThemeValue): 'light' | 'dark' {
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<ThemeValue>('dark');
+  const [theme, setThemeState] = useState<ThemeValue>('light');
 
   // Apply the resolved theme to the document root
   const applyTheme = useCallback((t: ThemeValue) => {
@@ -36,7 +36,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       const stored = localStorage.getItem('at-theme') as ThemeValue | null;
       const initial: ThemeValue = stored === 'light' || stored === 'dark' || stored === 'system'
         ? stored
-        : 'dark';
+        : 'light';
       setThemeState(initial);
       applyTheme(initial);
     } catch {

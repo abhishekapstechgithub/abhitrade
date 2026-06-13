@@ -189,7 +189,7 @@ export function ChartModal() {
 
           {/* Right: actions */}
           <div className="flex items-center gap-1 shrink-0">
-            <a href={`/markets?tab=charts&symbol=${target.symbol}`}
+            <a href={`/?tab=charts&symbol=${target.symbol}`}
               className="p-1.5 rounded-lg text-slate-500 hover:text-slate-300 transition-colors"
               style={{ border: '1px solid rgba(255,255,255,0.08)' }}
               title="Open in full charts page">
