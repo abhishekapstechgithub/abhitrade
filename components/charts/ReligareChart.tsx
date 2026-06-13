@@ -71,6 +71,7 @@ export function ReligareChart({
     continuous: '',
     group:      'g1',
     apikey:     API_KEY,
+    userid:     'test4',
   });
 
   return (
