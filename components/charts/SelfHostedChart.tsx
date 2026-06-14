@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
 import { Loader2, AlertCircle } from 'lucide-react';
 import { useDevToolsDetection } from '@/hooks/useDevToolsDetection';
 
@@ -50,21 +49,10 @@ export function SelfHostedChart({
   const [error,          setError]           = useState<string | null>(null);
   const [updatedAt,      setUpdatedAt]       = useState<string>('');
 
-  const dark          = theme === 'dark';
-  const router        = useRouter();
-  const devToolsOpen  = useDevToolsDetection();
+  const devToolsOpen = useDevToolsDetection();
+  const dark = theme === 'dark';
 
-  // Destroy chart and redirect to dashboard when DevTools is detected
-  useEffect(() => {
-    if (!devToolsOpen) return;
-    if (chartRef.current) {
-      chartRef.current.remove();
-      chartRef.current  = null;
-      candleRef.current = null;
-      volumeRef.current = null;
-    }
-    router.replace('/');
-  }, [devToolsOpen, router]);
+  if (devToolsOpen) return null;
 
   const fetchAndRender = useCallback(async (apiInterval: string) => {
     if (!candleRef.current || !volumeRef.current || !chartRef.current) return;
@@ -185,9 +173,6 @@ export function SelfHostedChart({
     const apiInterval = INTERVALS.find(i => i.label === activeInterval)?.api ?? 'ONE_DAY';
     fetchAndRender(apiInterval);
   };
-
-  // Render nothing while DevTools is open (redirect is already triggered above)
-  if (devToolsOpen) return null;
 
   return (
     <div className="flex flex-col w-full h-full"

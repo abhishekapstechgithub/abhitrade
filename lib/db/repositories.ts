@@ -191,6 +191,52 @@ export async function getExpiryDates(
   return res.rows.map(r => r.expiry);
 }
 
+// ─── Option Chain Queries ─────────────────────────────────────────────────────
+
+/** Load all option instruments for SM cache — called on service startup */
+export async function loadOptionInstruments(mode: TradingMode = 'live') {
+  const res = await getPool(mode).query<{
+    token: string; exchange: string; underlying: string;
+    expiry: string; strike: number; option_type: string;
+    trading_symbol: string; lot_size: number;
+  }>(
+    `SELECT token, exchange, underlying,
+            to_char(expiry, 'YYYY-MM-DD') AS expiry,
+            strike, option_type, trading_symbol, lot_size
+     FROM   security_master
+     WHERE  instrument_type IN ('OPTIDX','OPTSTK')
+       AND  is_active  = TRUE
+       AND  underlying IS NOT NULL
+       AND  expiry     IS NOT NULL
+       AND  strike     IS NOT NULL
+       AND  option_type IN ('CE','PE')
+     ORDER  BY underlying, expiry, strike`,
+  );
+  return res.rows;
+}
+
+/** Fetch expiries for a symbol — used as API response (sorted, unique) */
+export async function getOptionExpiries(
+  symbol:   string,
+  exchange?: string,
+  mode: TradingMode = 'live',
+): Promise<string[]> {
+  const params: unknown[] = [symbol.toUpperCase()];
+  let where = `underlying = $1
+    AND instrument_type IN ('OPTIDX','OPTSTK')
+    AND is_active = TRUE
+    AND expiry IS NOT NULL`;
+  if (exchange) { where += ' AND exchange = $2'; params.push(exchange.toUpperCase()); }
+  const res = await getPool(mode).query<{ expiry: string }>(
+    `SELECT DISTINCT to_char(expiry,'YYYY-MM-DD') AS expiry
+     FROM   security_master
+     WHERE  ${where}
+     ORDER  BY expiry`,
+    params,
+  );
+  return res.rows.map(r => r.expiry);
+}
+
 // ─── Upload Jobs ──────────────────────────────────────────────────────────────
 
 export async function createUploadJob(

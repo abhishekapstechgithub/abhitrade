@@ -1,11 +1,10 @@
 'use client';
-import { BarChart2, TrendingUp, PieChart, Star, ChevronRight } from 'lucide-react';
+import { BarChart2, PieChart, Star, ChevronRight } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useRef } from 'react';
 
 const MENU_ITEMS = [
   { id: 'option-chain', label: 'Option Chain', description: 'Live OI, IV, Greeks for all strikes', icon: BarChart2, href: '/?tab=option-chain', color: 'text-blue-600 bg-blue-50' },
-  { id: 'charts', label: 'Charts', description: 'Advanced multi-timeframe charting', icon: TrendingUp, href: '/?tab=charts', color: 'text-green-600 bg-green-50' },
   { id: 'composition', label: 'Stock Composition', description: 'Index weights, sectors, heatmaps', icon: PieChart, href: '/?tab=composition', color: 'text-purple-600 bg-purple-50' },
   { id: 'strategies', label: 'Favourite Strategies', description: 'Saved option strategies & builder', icon: Star, href: '/?tab=strategies', color: 'text-yellow-600 bg-yellow-50' },
 ];

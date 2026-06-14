@@ -1,7 +1,7 @@
 'use client';
 import {
-  ArrowUpRight, BarChart2, BarChart, ChevronRight, ChevronsDown, Clock, Eye,
-  Loader2, Maximize2, Newspaper, PieChart, RefreshCw,
+  ArrowUpRight, BarChart2, ChevronRight, Clock, Eye,
+  Loader2, Newspaper, PieChart, RefreshCw,
   Settings2, Star, TrendingDown, TrendingUp, Zap,
 } from 'lucide-react';
 import { useMarketStore } from '@/store/useMarketStore';
@@ -9,13 +9,11 @@ import { useUIStore } from '@/store/useUIStore';
 import { lookupToken } from '@/lib/angelone/tokens';
 import { formatNumber, formatPercent } from '@/lib/utils/format';
 import { useAngelOnePrices } from '@/hooks/useAngelOneWs';
-import { useTheme } from '@/components/theme/ThemeProvider';
 import { WatchlistItem } from '@/types';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import React, { Suspense, useId } from 'react';
 import { OptionChain } from '@/components/markets/OptionChain';
-import { ChartsPanel } from '@/components/markets/ChartsPanel';
 import { StockComposition } from '@/components/markets/StockComposition';
 import { FavouriteStrategies } from '@/components/markets/FavouriteStrategies';
 
@@ -34,6 +32,8 @@ function gainColor(pos: boolean)  { return pos ? 'var(--accent-green)' : 'var(--
 
 interface MarketMoverItem {
   id: number;
+  isin: string | null;
+  gsin: string | null;
   company_name: string;
   company_short: string | null;
   nse_code: string | null;
@@ -45,6 +45,7 @@ interface MarketMoverItem {
   market_cap: number | string | null;
   year_high: number | string | null;
   year_low: number | string | null;
+  volume: number | string | null;
   logo_url: string | null;
   tag: string | null;
   is_gainer: number;
@@ -182,7 +183,6 @@ function PanelHeader({ title, icon, href }: { title: string; icon: React.ReactNo
 // ─────────────────────────────────────────────────────────────────────────────
 const MARKET_TABS = [
   { key:'option-chain', label:'Option Chain',        Icon:BarChart2 },
-  { key:'charts',       label:'Charts',               Icon:BarChart  },
   { key:'composition',  label:'Stock Composition',    Icon:PieChart  },
   { key:'strategies',   label:'Favourite Strategies', Icon:Star      },
 ] as const;
@@ -191,7 +191,7 @@ type MarketTab = typeof MARKET_TABS[number]['key'];
 function MarketsSection() {
   const searchParams = useSearchParams();
   const rawTab = searchParams.get('tab') as MarketTab | null;
-  const validTabs: MarketTab[] = ['option-chain','charts','composition','strategies'];
+  const validTabs: MarketTab[] = ['option-chain','composition','strategies'];
   const [activeTab, setActiveTab] = React.useState<MarketTab>(
     rawTab && validTabs.includes(rawTab) ? rawTab : 'option-chain'
   );
@@ -224,7 +224,6 @@ function MarketsSection() {
       </div>
       <div style={{ minHeight:500 }}>
         {activeTab==='option-chain' && <OptionChain />}
-        {activeTab==='charts'       && <ChartsPanel />}
         {activeTab==='composition'  && <StockComposition />}
         {activeTab==='strategies'   && <FavouriteStrategies />}
       </div>
@@ -613,10 +612,24 @@ function CenterRow({ watchlist, onOrder }: {
   watchlist: WatchlistItem[];
   onOrder: (sym: string, side: 'BUY' | 'SELL') => void;
 }) {
+  const [gridCols, setGridCols] = React.useState('repeat(4,1fr)');
+  React.useEffect(() => {
+    function update() {
+      const w = window.innerWidth;
+      if (w >= 1280)      setGridCols('1fr 1.25fr 1.5fr 1.6fr');
+      else if (w >= 768)  setGridCols('repeat(2,1fr)');
+      else                setGridCols('1fr');
+    }
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3" style={{ minHeight:380 }}>
+    <div className="grid gap-3"
+      style={{ minHeight: 380, gridTemplateColumns: gridCols }}>
       <MarketHeatmapPanel />
-      <DashNiftyChart />
+      <TopMoversTabPanel />
       <DashWatchlistPanel items={watchlist} onOrder={onOrder} />
       <AIMarketInsightsPanel />
     </div>
@@ -656,52 +669,194 @@ function MarketHeatmapPanel() {
   );
 }
 
-const TF_MAP: Record<string, string> = {
-  '1D':'D', '5D':'5', '1M':'W', '3M':'M', '6M':'3M', '1Y':'12M',
-};
+// ─────────────────────────────────────────────────────────────────────────────
+// TOP MOVERS TAB PANEL (replaces chart in center row)
+// ─────────────────────────────────────────────────────────────────────────────
+type MoverTab = 'gainers' | 'losers' | 'volume_shockers' | 'top_by_volume' | '52w_high' | '52w_low';
+const MOVER_TABS: { key: MoverTab; label: string }[] = [
+  { key: 'gainers',         label: 'Gainers'    },
+  { key: 'losers',          label: 'Losers'     },
+  { key: 'volume_shockers', label: 'Vol Shock'  },
+  { key: 'top_by_volume',   label: 'Top Vol'    },
+  { key: '52w_high',        label: '52W High'   },
+  { key: '52w_low',         label: '52W Low'    },
+];
 
-function DashNiftyChart() {
-  const { theme } = useTheme();
-  const [tf, setTf]   = React.useState('1D');
-  const [rev, setRev] = React.useState(0);
-  const [mountId]     = React.useState(() => Date.now());
+function symColor(sym: string): string {
+  const palette = [BLUE, CYAN, EMERALD, ORANGE, PURPLE];
+  let h = 0;
+  for (const c of sym) h = (h * 31 + c.charCodeAt(0)) & 0xff;
+  return palette[h % palette.length];
+}
 
-  const params = new URLSearchParams({
-    theme: theme === 'dark' ? 'n' : 'd',
-    symbol: 'NSE:NIFTY',
-    interval: TF_MAP[tf] ?? 'D',
-    _cb: `${mountId}-${tf}-${theme}-${rev}`,
-  });
-  const src = `https://leap.religareonline.com/TV/index.html?${params.toString()}`;
+const MOVER_PAGE = 8;
+
+function fmtVol(v: number | string | null | undefined): string {
+  const n = Number(v ?? 0);
+  if (!n) return '—';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000)     return `${(n / 1_000).toFixed(0)}K`;
+  return String(n);
+}
+
+function moverSecondary(item: MarketMoverItem, tab: MoverTab): { label: string; color: string } {
+  const ltp = Number(item.ltp);
+  if (tab === 'volume_shockers' || tab === 'top_by_volume') {
+    return { label: `Vol ${fmtVol(item.volume)}`, color: C(ORANGE) };
+  }
+  if (tab === '52w_high') {
+    const yh = Number(item.year_high ?? 0);
+    const pct = yh > 0 ? ((ltp - yh) / yh * 100).toFixed(1) : null;
+    return { label: pct ? `52W H: ₹${formatNumber(yh)} (${pct}%)` : `52W H: ₹${formatNumber(yh)}`, color: C(EMERALD) };
+  }
+  if (tab === '52w_low') {
+    const yl = Number(item.year_low ?? 0);
+    const pct = yl > 0 ? ((ltp - yl) / yl * 100).toFixed(1) : null;
+    return { label: pct ? `52W L: ₹${formatNumber(yl)} (+${pct}%)` : `52W L: ₹${formatNumber(yl)}`, color: C(CYAN) };
+  }
+  return { label: item.company_short || item.company_name || item.gsin || '', color: 'var(--text-label)' };
+}
+
+function TopMoversTabPanel() {
+  const [tab, setTab]         = React.useState<MoverTab>('gainers');
+  const [allItems, setAll]    = React.useState<MarketMoverItem[]>([]);
+  const [visible, setVisible] = React.useState<MarketMoverItem[]>([]);
+  const [loading, setLoading] = React.useState(true);
+  const [syncing, setSyncing] = React.useState(false);
+  const [fetchedAt, setFAt]   = React.useState<string | null>(null);
+  const scrollRef             = React.useRef<HTMLDivElement>(null);
+
+  const fetchMovers = React.useCallback(async (type: MoverTab) => {
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/market-movers?type=${type}&limit=50`, { cache: 'no-store' });
+      const d = await r.json() as { items: MarketMoverItem[]; fetchedAt: string | null };
+      const rows = d.items ?? [];
+      setAll(rows);
+      setVisible(rows.slice(0, MOVER_PAGE));
+      setFAt(d.fetchedAt ?? null);
+    } catch { /* keep stale */ }
+    finally { setLoading(false); }
+  }, []);
+
+  React.useEffect(() => { fetchMovers(tab); }, [tab, fetchMovers]);
+
+  function handleScroll() {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 40) {
+      setVisible(prev => {
+        if (prev.length >= allItems.length) return prev;
+        return allItems.slice(0, prev.length + MOVER_PAGE);
+      });
+    }
+  }
+
+  async function handleSync(e: React.MouseEvent) {
+    e.stopPropagation();
+    setSyncing(true);
+    try {
+      await fetch(`/api/market-movers?type=${tab}`, { method: 'POST' });
+      await fetchMovers(tab);
+    } catch { /* ignore */ }
+    finally { setSyncing(false); }
+  }
+
+  const remaining = allItems.length - visible.length;
 
   return (
     <div className="glass rounded-2xl overflow-hidden flex flex-col">
+      {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 shrink-0"
-        style={{ borderBottom:'1px solid var(--panel-divider)' }}>
-        <span className="text-xs font-semibold" style={{ color:'var(--text-secondary)' }}>NIFTY 50 Chart</span>
-        <div className="flex items-center gap-0.5">
-          {Object.keys(TF_MAP).map(t => (
-            <button key={t} onClick={() => setTf(t)}
-              className="px-1.5 py-0.5 rounded text-[10px] font-semibold transition-all"
-              style={tf===t ? { background:G(BLUE, 0.2), color:C(BLUE) } : { color:'var(--text-dim)' }}>
-              {t}
-            </button>
-          ))}
-          <div className="w-px h-4 mx-1" style={{ background:'var(--panel-divider)' }} />
-          <button onClick={() => setRev(r => r+1)} className="p-1 rounded hover:opacity-75"
-            style={{ color:'var(--text-dim)' }}>
-            <RefreshCw size={11} />
+        style={{ borderBottom: '1px solid var(--panel-divider)' }}>
+        <span className="text-xs font-bold" style={{ color: 'var(--text-secondary)' }}>Top Movers</span>
+        <div className="flex items-center gap-1.5">
+          {fetchedAt && (
+            <span className="text-[9px]" style={{ color: 'var(--text-dim)' }}>
+              {new Date(fetchedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}
+            </span>
+          )}
+          <button onClick={handleSync} title="Sync from Groww"
+            className="p-1 rounded hover:opacity-75 transition-opacity"
+            style={{ color: 'var(--text-dim)' }}>
+            <RefreshCw size={11} className={syncing ? 'animate-spin' : ''} />
           </button>
-          <Link href="/?tab=charts">
-            <button className="p-1 rounded hover:opacity-75" style={{ color:'var(--text-dim)' }}>
-              <Maximize2 size={11} />
-            </button>
-          </Link>
         </div>
       </div>
-      <div className="flex-1" style={{ minHeight:316 }}>
-        <iframe src={src} className="w-full h-full border-none" style={{ minHeight:316 }} />
+
+      {/* Tabs */}
+      <div className="flex shrink-0" style={{ borderBottom: '1px solid var(--panel-divider)' }}>
+        {MOVER_TABS.map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            className="flex-1 py-1.5 text-[9px] font-semibold whitespace-nowrap transition-all"
+            style={tab === t.key
+              ? { color: 'var(--accent-blue)', borderBottom: '2px solid var(--accent-blue)' }
+              : { color: 'var(--text-dim)', borderBottom: '2px solid transparent' }}>
+            {t.label}
+          </button>
+        ))}
       </div>
+
+      {/* Content */}
+      {loading ? (
+        <div className="flex items-center justify-center py-8 gap-2 text-xs" style={{ color: 'var(--text-dim)' }}>
+          <Loader2 size={13} className="animate-spin" /> Loading…
+        </div>
+      ) : !allItems.length ? (
+        <div className="flex flex-col items-center justify-center py-8 gap-2">
+          <span className="text-[10px]" style={{ color: 'var(--text-dim)' }}>No data yet</span>
+          <button onClick={handleSync} className="px-3 py-1 rounded-lg text-[10px] font-semibold"
+            style={{ background: G(EMERALD, 0.12), color: C(EMERALD), border: `1px solid rgba(${EMERALD},0.3)` }}>
+            {syncing ? 'Syncing…' : 'Fetch from Groww'}
+          </button>
+        </div>
+      ) : (
+        <>
+          <div ref={scrollRef} onScroll={handleScroll}
+            className="overflow-y-auto no-scrollbar"
+            style={{ height: MOVER_PAGE * 44 }}>
+            {visible.map((q, i) => {
+              const chgPct = Number(q.change_pct);
+              const ltp    = Number(q.ltp);
+              const pos    = chgPct >= 0;
+              const sym    = q.nse_code || q.bse_code || q.gsin?.replace('GSTK', 'BSE:') || '';
+              const col    = symColor(sym);
+              const sec    = moverSecondary(q, tab);
+              return (
+                <div key={`${sym}-${i}`}
+                  className="flex items-center gap-2 px-3 py-2 cursor-pointer"
+                  style={{ borderBottom: '1px solid var(--row-border)' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--row-hover-bg)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = '')}>
+                  <span className="text-[9px] font-bold w-4 shrink-0 text-right" style={{ color: 'var(--text-dim)' }}>{i + 1}</span>
+                  <div className="w-7 h-7 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
+                    style={{ background: `rgba(${col},0.2)`, color: C(col) }}>
+                    {sym.slice(0, 2)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[11px] font-bold truncate" style={{ color: 'var(--text-secondary)' }}>{sym}</div>
+                    <div className="text-[9px] truncate" style={{ color: sec.color }}>{sec.label}</div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <div className="text-[11px] font-mono font-bold" style={{ color: 'var(--text-bright)' }}>
+                      {formatNumber(ltp)}
+                    </div>
+                    <div className="text-[10px] font-bold" style={{ color: gainColor(pos) }}>
+                      {pos ? '▲ +' : '▼ '}{Math.abs(chgPct).toFixed(2)}%
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {remaining > 0 && (
+            <div className="shrink-0 flex items-center justify-center gap-1 py-1 text-[9px] font-semibold"
+              style={{ borderTop: '1px solid var(--panel-divider)', color: 'var(--text-dim)' }}>
+              ↓ scroll for {remaining} more
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -840,10 +995,8 @@ function AIMarketInsightsPanel() {
 // ─────────────────────────────────────────────────────────────────────────────
 function BottomRow() {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3" style={{ minHeight:280 }}>
+    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3" style={{ minHeight:280 }}>
       <NewsEventsPanel />
-      <TopMoversPanel type="gainers" />
-      <TopMoversPanel type="losers" />
       <MiniMoversTable title="Volume Shockers" icon={<BarChart2 size={12} style={{ color:C(ORANGE) }} />} items={VOL_SHOCKERS} />
       <MiniMoversTable title="OI Buildup Long"  icon={<TrendingUp size={12} style={{ color:C(EMERALD) }} />} items={OI_LONG} />
       <MiniMoversTable title="OI Buildup Short" icon={<TrendingDown size={12} style={{ color:C(RED) }} />} items={OI_SHORT} />
@@ -889,146 +1042,6 @@ function NewsEventsPanel() {
   );
 }
 
-const PAGE = 8; // rows visible at a time
-
-function TopMoversPanel({ type }: { type: 'gainers' | 'losers' }) {
-  const [allItems, setAllItems]   = React.useState<MarketMoverItem[]>([]);
-  const [visible, setVisible]     = React.useState<MarketMoverItem[]>([]);
-  const [loading, setLoading]     = React.useState(true);
-  const [syncing, setSyncing]     = React.useState(false);
-  const [fetchedAt, setFetchedAt] = React.useState<string | null>(null);
-  const scrollRef                 = React.useRef<HTMLDivElement>(null);
-  const openOrderPanel            = useUIStore(s => s.openOrderPanel);
-
-  const load = React.useCallback(async () => {
-    try {
-      const r = await fetch(`/api/market-movers?type=${type}&limit=50`, { cache:'no-store' });
-      const d = await r.json() as { items: MarketMoverItem[]; fetchedAt: string | null };
-      const rows = d.items ?? [];
-      setAllItems(rows);
-      setVisible(rows.slice(0, PAGE));   // only first 8 rendered
-      setFetchedAt(d.fetchedAt ?? null);
-    } catch { /* keep stale */ }
-    finally { setLoading(false); }
-  }, [type]);
-
-  React.useEffect(() => { load(); }, [load]);
-
-  function handleScroll() {
-    const el = scrollRef.current;
-    if (!el) return;
-    // when user scrolls within 40px of bottom, reveal next PAGE rows
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 40) {
-      setVisible(prev => {
-        if (prev.length >= allItems.length) return prev;
-        return allItems.slice(0, prev.length + PAGE);
-      });
-    }
-  }
-
-  async function handleSync(e: React.MouseEvent) {
-    e.stopPropagation();
-    setSyncing(true);
-    try {
-      await fetch('/api/market-movers', { method:'POST' });
-      await load();
-    } catch { /* ignore */ }
-    finally { setSyncing(false); }
-  }
-
-  const isGainers = type === 'gainers';
-  const col = isGainers ? EMERALD : RED;
-  const remaining = allItems.length - visible.length;
-
-  return (
-    <div className="glass rounded-2xl overflow-hidden flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2.5 shrink-0"
-        style={{ borderBottom:'1px solid var(--panel-divider)' }}>
-        <span className="text-xs font-semibold flex items-center gap-1.5" style={{ color:'var(--text-secondary)' }}>
-          {isGainers ? <TrendingUp size={12} style={{ color:C(col) }} /> : <TrendingDown size={12} style={{ color:C(col) }} />}
-          {isGainers ? 'Top Gainers' : 'Top Losers'}
-        </span>
-        <div className="flex items-center gap-2">
-          {fetchedAt && (
-            <span className="text-[9px]" style={{ color:'var(--text-dim)' }}>
-              {new Date(fetchedAt).toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', timeZone:'Asia/Kolkata' })}
-            </span>
-          )}
-          <button onClick={handleSync} title="Sync from Groww" className="p-1 rounded hover:opacity-75 transition-opacity"
-            style={{ color:'var(--text-dim)' }}>
-            <RefreshCw size={11} className={syncing ? 'animate-spin' : ''} />
-          </button>
-        </div>
-      </div>
-
-      {/* Column headers */}
-      <div className="grid grid-cols-[16px_1fr_56px_52px] gap-1 px-3 py-1 text-[9px] font-bold uppercase tracking-wider shrink-0"
-        style={{ borderBottom:'1px solid var(--panel-divider)', color:'var(--text-label)' }}>
-        <span>#</span>
-        <span>Company</span>
-        <span className="text-right">LTP</span>
-        <span className="text-right">Chg%</span>
-      </div>
-
-      {loading ? (
-        <div className="flex items-center justify-center py-8 text-xs gap-2" style={{ color:'var(--text-dim)' }}>
-          <Loader2 size={13} className="animate-spin" />Loading…
-        </div>
-      ) : !allItems.length ? (
-        <div className="flex flex-col items-center justify-center py-8 gap-2 px-3 text-center">
-          <span className="text-[10px]" style={{ color:'var(--text-dim)' }}>No data yet</span>
-          <button onClick={handleSync}
-            className="px-3 py-1 rounded-lg text-[10px] font-semibold"
-            style={{ background:G(col, 0.12), color:C(col), border:`1px solid rgba(${col},0.3)` }}>
-            {syncing ? 'Syncing…' : 'Fetch from Groww'}
-          </button>
-        </div>
-      ) : (
-        <div ref={scrollRef} onScroll={handleScroll}
-          className="overflow-y-auto" style={{ height: PAGE * 37 }}>
-          {visible.map((q, idx) => {
-            const chgPct = Number(q.change_pct);
-            const ltp    = Number(q.ltp);
-            const pos    = chgPct >= 0;
-            const sym    = q.nse_code || q.bse_code || '';
-            const name   = q.company_short || q.company_name;
-            return (
-              <div key={`${q.nse_code}-${idx}`} className="grid grid-cols-[16px_1fr_56px_52px] gap-1 items-center px-3 py-2 cursor-pointer"
-                style={{ borderBottom:'1px solid var(--row-border)' }}
-                onMouseEnter={e => (e.currentTarget.style.background='var(--row-hover-bg)')}
-                onMouseLeave={e => (e.currentTarget.style.background='')}>
-                <span className="text-[9px] font-bold" style={{ color:'var(--text-dim)' }}>{idx + 1}</span>
-                <div className="min-w-0">
-                  <div className="text-[11px] font-bold truncate" style={{ color:'var(--text-secondary)' }}>{sym}</div>
-                  <div className="text-[9px] truncate" style={{ color:'var(--text-label)' }}>{name}</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-[11px] font-mono font-bold" style={{ color:'var(--text-bright)' }}>
-                    {formatNumber(ltp)}
-                  </div>
-                </div>
-                <div className="text-right">
-                  <span className="text-[10px] font-bold" style={{ color: gainColor(pos) }}>
-                    {pos ? '+' : ''}{chgPct.toFixed(2)}%
-                  </span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-      {/* footer — shows remaining count, disappears when all loaded */}
-      {remaining > 0 && (
-        <div className="shrink-0 flex items-center justify-center gap-1 py-0.5 text-[9px] font-semibold"
-          style={{ borderTop:'1px solid var(--panel-divider)', color:'var(--text-dim)' }}>
-          <ChevronsDown size={10} />
-          scroll for {remaining} more
-        </div>
-      )}
-    </div>
-  );
-}
 
 function MiniMoversTable({ title, icon, items }: {
   title: string;

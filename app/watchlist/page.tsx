@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useDevToolsDetection } from '@/hooks/useDevToolsDetection';
 import {
   Plus, Search, Settings, X, RefreshCw,
   List, TrendingUp, FileText, BarChart2, Link2,
@@ -1406,7 +1407,15 @@ function ChartMode({ items, activeWL, setActiveWL, onAdd, onRemove, onSwitchToTa
 
 // ─── PAGE ROOT ────────────────────────────────────────────────────────────────
 
+// Guard: if DevTools are open, render nothing at all — no hooks run, no API
+// calls fire, no chart iframes load. Close DevTools to access the watchlist.
 export default function WatchlistPage() {
+  const devToolsOpen = useDevToolsDetection();
+  if (devToolsOpen) return null;
+  return <WatchlistContent />;
+}
+
+function WatchlistContent() {
   const [items, setItems]         = useState<WatchlistItem[]>([]);
   const [activeWL, setActiveWL]   = useState(0);
   const [viewMode, setViewMode]   = useState<'chart' | 'table'>('chart');

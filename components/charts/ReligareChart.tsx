@@ -1,7 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState } from 'react';
 import { useDevToolsDetection } from '@/hooks/useDevToolsDetection';
 
 interface Props {
@@ -48,15 +47,8 @@ export function ReligareChart({
   interval  = 'MIN',
   chartStyle = 'line',
 }: Props) {
-  const router       = useRouter();
   const devToolsOpen = useDevToolsDetection();
-  // Unique timestamp captured at mount time — forces browser to bypass cache on each remount
-  // (key-prop change causes remount, so this always gets a fresh value when theme/symbol changes)
   const [mountId] = useState(() => Date.now());
-
-  useEffect(() => {
-    if (devToolsOpen) router.replace('/');
-  }, [devToolsOpen, router]);
 
   if (devToolsOpen) return null;
 

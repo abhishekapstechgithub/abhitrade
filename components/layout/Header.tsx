@@ -1,7 +1,7 @@
 'use client';
 import {
   Bell, ChevronDown, Search, BarChart2, FlaskConical, Zap,
-  Activity, PieChart, Star, ChevronRight, Sun, Moon, Monitor,
+  PieChart, Star, ChevronRight, Sun, Moon, Monitor,
 } from 'lucide-react';
 import { useMarketStore } from '@/store/useMarketStore';
 import { useUIStore } from '@/store/useUIStore';
@@ -14,8 +14,6 @@ import Link from 'next/link';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTheme } from '@/components/theme/ThemeProvider';
 import { MarketIndex } from '@/types';
-import { MarketsMenu } from '@/components/markets/MarketsMenu';
-
 const INDEX_EXCHANGE_TOKENS = { NSE: ['99926000', '99926009'], BSE: ['99919000'] };
 const TOKEN_LABELS: Record<string, string> = {
   '99926000': 'NIFTY 50',
@@ -24,7 +22,7 @@ const TOKEN_LABELS: Record<string, string> = {
 };
 
 const NAV_LINKS = [
-  { id: 'markets',   label: 'Markets',   href: '/',          hasMenu: true },
+  { id: 'markets',   label: 'Markets',   href: '/' },
   { id: 'watchlist', label: 'Watchlist', href: '/watchlist' },
   { id: 'portfolio', label: 'Portfolio', href: '/portfolio' },
   { id: 'orders',    label: 'Orders',    href: '/orders' },
@@ -34,10 +32,9 @@ const NAV_LINKS = [
 
 // Quick-action menu shown on chip hover
 const CHIP_ACTIONS = [
-  { label: 'Option Chain',       href: '/?tab=option-chain', Icon: BarChart2 },
-  { label: 'Charts',             href: '/?tab=charts',       Icon: Activity  },
-  { label: 'Stock Composition',  href: '/?tab=composition',  Icon: PieChart  },
-  { label: 'Favourite Strategies', href: '/?tab=strategies', Icon: Star      },
+  { label: 'Option Chain',         href: '/?tab=option-chain', Icon: BarChart2 },
+  { label: 'Stock Composition',    href: '/?tab=composition',  Icon: PieChart  },
+  { label: 'Favourite Strategies', href: '/?tab=strategies',   Icon: Star      },
 ];
 
 // ── useOutsideClick ────────────────────────────────────────────────────────────
@@ -76,7 +73,6 @@ export function Header() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
-  const [marketsMenuOpen, setMarketsMenuOpen] = useState(false);
   const [indicesListOpen, setIndicesListOpen] = useState(false);
   const indicesListRef = useRef<HTMLDivElement | null>(null);
 
@@ -259,28 +255,13 @@ export function Header() {
         <nav className="hidden lg:flex items-center gap-0.5">
           {NAV_LINKS.map(link => (
             <div key={link.id} className="relative">
-              {link.hasMenu ? (
-                <button
-                  onClick={() => setMarketsMenuOpen(!marketsMenuOpen)}
-                  className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md transition-all"
-                  style={marketsMenuOpen
-                    ? { background:'rgba(0,212,255,0.08)', color:'var(--accent-cyan)' }
-                    : { color:'var(--text-dim)' }}>
-                  {link.label}
-                  <ChevronDown size={11} className={cn('opacity-60 transition-transform', marketsMenuOpen && 'rotate-180')} />
-                </button>
-              ) : (
-                <Link href={link.href} onClick={() => setActiveNav(link.id)}
-                  className="px-2.5 py-1.5 text-xs font-medium rounded-md transition-all block"
-                  style={activeNav === link.id
-                    ? { background:'rgba(0,212,255,0.08)', color:'var(--accent-cyan)' }
-                    : { color:'var(--text-dim)' }}>
-                  {link.label}
-                </Link>
-              )}
-              {link.hasMenu && marketsMenuOpen && (
-                <MarketsMenu onClose={() => setMarketsMenuOpen(false)} />
-              )}
+              <Link href={link.href} onClick={() => setActiveNav(link.id)}
+                className="px-2.5 py-1.5 text-xs font-medium rounded-md transition-all block"
+                style={activeNav === link.id
+                  ? { background:'rgba(0,212,255,0.08)', color:'var(--accent-cyan)' }
+                  : { color:'var(--text-dim)' }}>
+                {link.label}
+              </Link>
             </div>
           ))}
         </nav>

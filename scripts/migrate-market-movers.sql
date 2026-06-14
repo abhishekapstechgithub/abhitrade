@@ -1,5 +1,11 @@
--- Market Movers: top 50 gainers and losers synced from Groww API
--- is_gainer: 1 = gainer, 0 = loser
+-- Market Movers: top 50 stocks synced from Groww API.
+-- is_gainer (mover_type) codes:
+--   0 = losers           (TOP_LOSERS)
+--   1 = gainers          (TOP_GAINERS)
+--   2 = volume_shockers  (VOLUME_SHOCKERS)
+--   3 = top_by_volume    (TRADED_BY_VOLUME)
+--   4 = 52w_high         (YEARLY_HIGH)
+--   5 = 52w_low          (YEARLY_LOW)
 CREATE TABLE IF NOT EXISTS market_movers (
   id            BIGSERIAL     PRIMARY KEY,
   isin          VARCHAR(20),
@@ -16,9 +22,10 @@ CREATE TABLE IF NOT EXISTS market_movers (
   market_cap    NUMERIC(18,2),
   year_high     NUMERIC(14,2),
   year_low      NUMERIC(14,2),
+  volume        NUMERIC(20,0),
   logo_url      TEXT,
   tag           VARCHAR(100),
-  is_gainer     INTEGER       NOT NULL DEFAULT 0,   -- 1 = gainer, 0 = loser
+  is_gainer     INTEGER       NOT NULL DEFAULT 0,
   rank          INTEGER       NOT NULL,
   fetched_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );

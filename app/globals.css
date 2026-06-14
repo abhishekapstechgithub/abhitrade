@@ -2,6 +2,16 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Override browser default yellow selection highlight */
+::selection {
+  background: rgba(59, 130, 246, 0.35);
+  color: inherit;
+}
+::-moz-selection {
+  background: rgba(59, 130, 246, 0.35);
+  color: inherit;
+}
+
 :root {
   --bg-base:    #050b18;
   --bg-surface: #081020;

@@ -27,6 +27,14 @@ yarn-error.log*
 
 # local env files
 .env
+.env.local
+.env*.local
+
+# binaries & temp files — never commit
+*.apk
+*.aab
+*.ipa
+files.txt
 
 # credentials & secrets — never commit
 CREDENTIALS.md
