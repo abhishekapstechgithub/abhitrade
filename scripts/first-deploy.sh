@@ -16,30 +16,38 @@ echo "  AbhiTrade — First Production Deploy"
 echo "══════════════════════════════════════════════════════"
 echo ""
 
+# ── Detect docker compose command (v2 plugin vs v1 standalone) ───────────────
+if docker compose version &>/dev/null 2>&1; then
+  DC="docker compose"
+elif command -v docker-compose &>/dev/null; then
+  DC="docker-compose"
+else
+  echo "ERROR: Neither 'docker compose' nor 'docker-compose' found."
+  echo "  Install Docker Engine: https://docs.docker.com/engine/install/"
+  exit 1
+fi
+echo "  Using: $DC"
+echo ""
+
 # ── 1. Sanity checks ─────────────────────────────────────────────────────────
 if [ ! -f ".env.local" ]; then
   echo "ERROR: .env.local not found."
-  echo "  cp .env.local.example .env.local && edit JWT_SECRET + passwords"
-  exit 1
-fi
-
-if ! command -v docker-compose &>/dev/null; then
-  echo "ERROR: docker-compose not found. Install it first."
+  echo "  cp .env.local.example .env.local  then set JWT_SECRET + passwords"
   exit 1
 fi
 
 # ── 2. Build and start all services ──────────────────────────────────────────
 echo "[1/4] Building and starting all services..."
-docker-compose up -d --build
+$DC up -d --build
 
 # ── 3. Wait for postgres to be healthy (schema auto-applies on first start) ──
 echo "[2/4] Waiting for PostgreSQL to be ready..."
 ATTEMPTS=0
-until docker-compose exec -T postgres pg_isready -U tradekaro -d abhitrade_live &>/dev/null; do
+until $DC exec -T postgres pg_isready -U tradekaro -d abhitrade_live &>/dev/null; do
   ATTEMPTS=$((ATTEMPTS+1))
   if [ $ATTEMPTS -gt 30 ]; then
     echo "ERROR: PostgreSQL did not become ready after 60s."
-    docker-compose logs postgres | tail -20
+    $DC logs postgres | tail -20
     exit 1
   fi
   echo "  still waiting... ($ATTEMPTS)"
@@ -54,7 +62,7 @@ until curl -sf http://localhost/api/health &>/dev/null; do
   ATTEMPTS=$((ATTEMPTS+1))
   if [ $ATTEMPTS -gt 45 ]; then
     echo "ERROR: App did not become healthy after 90s."
-    docker-compose logs app | tail -30
+    $DC logs app | tail -30
     exit 1
   fi
   echo "  still waiting... ($ATTEMPTS)"
@@ -78,7 +86,7 @@ echo ""
 echo "  App:    http://$(curl -s ifconfig.me 2>/dev/null || echo '<server-ip>')"
 echo "  HTTPS:  https://abhitrade.com  (after SSL setup)"
 echo ""
-echo "  Check status:  docker-compose ps"
-echo "  Check logs:    docker-compose logs -f app"
+echo "  Check status:  $DC ps"
+echo "  Check logs:    $DC logs -f app"
 echo "══════════════════════════════════════════════════════"
 echo ""
