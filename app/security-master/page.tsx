@@ -201,17 +201,22 @@ function BhavcopyTab() {
           {lastLoad.results && lastLoad.results.length > 0 && (
             <div className="mt-3 space-y-1">
               {lastLoad.results.map(r => (
-                <div key={r.file} className="flex items-center justify-between text-xs px-3 py-1.5 bg-gray-50 rounded-lg border border-gray-100">
-                  <div className="flex items-center gap-2">
-                    <File size={11} className="text-gray-400" />
-                    <span className="font-mono text-gray-700 truncate max-w-[260px]">{r.file}</span>
-                    {r.date && <span className="text-gray-400">· {r.date}</span>}
+                <div key={r.file} className="text-xs px-3 py-1.5 bg-gray-50 rounded-lg border border-gray-100">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <File size={11} className="text-gray-400" />
+                      <span className="font-mono text-gray-700 truncate max-w-[260px]">{r.file}</span>
+                      {r.date && <span className="text-gray-400">· {r.date}</span>}
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <span className="text-green-700 font-semibold">{r.loaded.toLocaleString('en-IN')} updated</span>
+                      <span className="text-gray-400">{r.skipped.toLocaleString('en-IN')} skipped</span>
+                      {r.errors.length > 0 && <span className="text-red-500">{r.errors.length} err</span>}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    <span className="text-green-700 font-semibold">{r.loaded.toLocaleString('en-IN')} updated</span>
-                    <span className="text-gray-400">{r.skipped.toLocaleString('en-IN')} skipped</span>
-                    {r.errors.length > 0 && <span className="text-red-500">{r.errors.length} err</span>}
-                  </div>
+                  {r.errors.length > 0 && (
+                    <div className="mt-1 text-[10px] text-red-500 font-mono break-all">{r.errors[0]}</div>
+                  )}
                 </div>
               ))}
             </div>
@@ -314,17 +319,20 @@ function BhavcopyTab() {
               ))}
             </div>
             {result.results && result.results.map(r => (
-              <div key={r.file} className="mt-2 flex items-center justify-between text-xs px-3 py-2 bg-white rounded-lg border border-green-100">
-                <span className="font-mono text-gray-700 truncate">{r.file}</span>
-                {r.date && <span className="text-gray-400 mx-2">· {r.date}</span>}
-                <div className="flex gap-3 shrink-0">
-                  <span className="text-green-700 font-semibold">{r.loaded.toLocaleString('en-IN')} updated</span>
-                  {r.errors.length > 0 && (
-                    <span className="text-red-500" title={r.errors.slice(0,3).join('\n')}>
-                      {r.errors.length} errors
-                    </span>
-                  )}
+              <div key={r.file} className="mt-2 text-xs px-3 py-2 bg-white rounded-lg border border-green-100">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-gray-700 truncate">{r.file}</span>
+                  {r.date && <span className="text-gray-400 mx-2">· {r.date}</span>}
+                  <div className="flex gap-3 shrink-0">
+                    <span className="text-green-700 font-semibold">{r.loaded.toLocaleString('en-IN')} updated</span>
+                    {r.errors.length > 0 && (
+                      <span className="text-red-500">{r.errors.length} errors</span>
+                    )}
+                  </div>
                 </div>
+                {r.errors.length > 0 && (
+                  <div className="mt-1 text-[10px] text-red-500 font-mono break-all">{r.errors[0]}</div>
+                )}
               </div>
             ))}
           </div>

@@ -26,7 +26,8 @@ export interface BhavcopyStats {
 let _migrationDone = false;
 async function ensureColumns(): Promise<void> {
   if (_migrationDone) return;
-  await getPool('live').query(`
+  const pool = getPool('live');
+  await pool.query(`
     ALTER TABLE security_master
       ADD COLUMN IF NOT EXISTS ltp              DECIMAL(12,2),
       ADD COLUMN IF NOT EXISTS open_price       DECIMAL(12,2),
@@ -35,12 +36,17 @@ async function ensureColumns(): Promise<void> {
       ADD COLUMN IF NOT EXISTS close_price      DECIMAL(12,2),
       ADD COLUMN IF NOT EXISTS prev_close       DECIMAL(12,2),
       ADD COLUMN IF NOT EXISTS net_change       DECIMAL(12,2),
-      ADD COLUMN IF NOT EXISTS change_pct       DECIMAL(8,4),
+      ADD COLUMN IF NOT EXISTS change_pct       DECIMAL(12,4),
       ADD COLUMN IF NOT EXISTS volume           BIGINT,
       ADD COLUMN IF NOT EXISTS open_interest    BIGINT,
       ADD COLUMN IF NOT EXISTS price_date       DATE,
       ADD COLUMN IF NOT EXISTS price_updated_at TIMESTAMPTZ
   `);
+  // Widen change_pct if an older deployment created it as DECIMAL(8,4).
+  // Options can have 10000%+ changes (e.g. ₹0.05 → ₹5.05), which overflows DECIMAL(8,4).
+  await pool.query(`
+    ALTER TABLE security_master ALTER COLUMN change_pct TYPE DECIMAL(12,4)
+  `).catch(() => {});
   _migrationDone = true;
 }
 

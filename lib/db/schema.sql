@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS security_master (
   close_price      DECIMAL(12,2),
   prev_close       DECIMAL(12,2),
   net_change       DECIMAL(12,2),
-  change_pct       DECIMAL(8,4),
+  change_pct       DECIMAL(12,4),
   volume           BIGINT,
   open_interest    BIGINT,
   price_date       DATE,

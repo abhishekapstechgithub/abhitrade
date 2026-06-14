@@ -38,6 +38,7 @@ services:
       - ./scripts/migrate-market-movers.sql:/docker-entrypoint-initdb.d/migrate-market-movers.sql:ro
       - ./scripts/migrate-market-movers-v2.sql:/docker-entrypoint-initdb.d/migrate-market-movers-v2.sql:ro
       - ./scripts/migrate-bhavcopy-prices.sql:/docker-entrypoint-initdb.d/migrate-bhavcopy-prices.sql:ro
+      - ./scripts/migrate-bhavcopy-widenpct.sql:/docker-entrypoint-initdb.d/migrate-bhavcopy-widenpct.sql:ro
     restart: unless-stopped
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-tradekaro} -d abhitrade_live']
