@@ -26,6 +26,9 @@ else
   echo "  Install Docker Engine: https://docs.docker.com/engine/install/"
   exit 1
 fi
+# Always pass -f docker-compose.yml explicitly so docker-compose.override.yml
+# (which is local-dev-only) never auto-merges on the production server.
+DC="$DC -f docker-compose.yml"
 echo "  Using: $DC"
 echo ""
 
