@@ -7,9 +7,13 @@ const SESSION_COOKIE = 'at_sid';
 
 const PUBLIC_PATHS = [
   '/login',
+  // Auth — all auth endpoints must be public
+  '/api/auth/login',
+  '/api/auth/register',
   '/api/auth/send-otp',
   '/api/auth/verify-otp',
-  '/api/auth/register',
+  '/api/auth/refresh',
+  // Market data — no auth needed
   '/api/health',
   '/api/search',
   '/api/ws-credentials',
@@ -17,11 +21,15 @@ const PUBLIC_PATHS = [
   '/api/gainers-losers',
   '/api/market-movers',
   '/api/index-prices',
+  '/api/market-sync',
   '/api/bhavcopy',
   '/api/index-bhavcopy',
   '/api/yahoo-chart',
   '/api/chart',
   '/api/optionchain',
+  '/api/quote',
+  '/api/scrips',
+  '/api/instruments',
   '/_next',
   '/favicon.ico',
 ];
@@ -66,6 +74,15 @@ export function middleware(req: NextRequest) {
 
   const sessionId = req.cookies.get(SESSION_COOKIE)?.value;
   if (!sessionId) {
+    // API routes: return JSON 401 so mobile/Flutter clients get a proper error
+    // (not an HTML redirect they can't parse)
+    if (pathname.startsWith('/api/')) {
+      return withCors(
+        req,
+        NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+      );
+    }
+    // Web pages: redirect to login
     const loginUrl = new URL('/login', req.url);
     loginUrl.searchParams.set('from', pathname);
     return NextResponse.redirect(loginUrl);
