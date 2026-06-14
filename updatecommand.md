@@ -19,7 +19,7 @@ docker push abhishekdevopstech/tradekaro-app:prod
 ### Step 2 — On server: pull & restart
 
 ```bash
-cd ~/TradeKaro
+cd ~/AbhiTrade/abhitrade
 
 # Pull latest code (for schema / nginx config changes)
 git pull origin main
@@ -38,7 +38,7 @@ docker-compose -f docker-compose.hub.yml logs --tail=30 app
 ## Option B — Build on Server Directly
 
 ```bash
-cd ~/TradeKaro
+cd ~/AbhiTrade/abhitrade
 
 git pull origin main
 
@@ -52,7 +52,7 @@ docker-compose logs --tail=30 app
 ## One-Liner (Hub deployment)
 
 ```bash
-cd ~/TradeKaro && git pull origin main && \
+cd ~/AbhiTrade/abhitrade && git pull origin main && \
 docker-compose -f docker-compose.hub.yml pull app && \
 docker-compose -f docker-compose.hub.yml up -d --no-deps app && \
 docker-compose -f docker-compose.hub.yml logs --tail=20 app
