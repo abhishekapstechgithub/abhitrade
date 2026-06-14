@@ -29,6 +29,7 @@ const PUBLIC_PATHS = [
   '/api/chart',
   '/api/optionchain',
   '/api/quote',
+  '/api/market-stream',
   '/api/scrips',
   '/api/instruments',
   '/_next',

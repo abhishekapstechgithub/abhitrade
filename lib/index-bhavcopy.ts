@@ -15,6 +15,7 @@ import fs   from 'fs';
 import path from 'path';
 import { parse } from 'csv-parse/sync';
 import { getPool } from '@/lib/db/client';
+import { redis } from '@/lib/redis-client';
 
 export interface IndexResult {
   file:    string;
@@ -140,8 +141,9 @@ async function processFile(filePath: string): Promise<IndexResult> {
 
   if (!rows.length) return result;
 
-  const headers = Object.keys(rows[0]);
-  const pool    = getPool('live');
+  const headers  = Object.keys(rows[0]);
+  const pool     = getPool('live');
+  const redisBuf: Array<{ key: string; val: object }> = [];
 
   if (isNSEFormat(headers)) {
     result.exchange = 'NSE';
@@ -169,6 +171,12 @@ async function processFile(filePath: string): Promise<IndexResult> {
           p(row['P/E']), p(row['P/B']), p(row['Div Yield']),
         ]);
         result.loaded++;
+        redisBuf.push({
+          key: `at:market:eod:NSE:${symbol.toUpperCase()}`,
+          val: { symbol, exchange: 'NSE', ltp: close, open, high, low, close,
+                 prevClose, netChange: netChg, changePct: chgPct, volume: vol,
+                 date, source: 'eod_index', updatedAt: Date.now() },
+        });
       } catch (e) {
         result.errors.push((e as Error).message);
         result.skipped++;
@@ -202,6 +210,12 @@ async function processFile(filePath: string): Promise<IndexResult> {
           null, null, null,
         ]);
         result.loaded++;
+        redisBuf.push({
+          key: `at:market:eod:BSE:${symbol.toUpperCase()}`,
+          val: { symbol, exchange: 'BSE', ltp: close, open, high, low, close,
+                 prevClose, netChange: netChg, changePct: chgPct, high52w, low52w,
+                 date: fileDate, source: 'eod_index', updatedAt: Date.now() },
+        });
       } catch (e) {
         result.errors.push((e as Error).message);
         result.skipped++;
@@ -209,6 +223,13 @@ async function processFile(filePath: string): Promise<IndexResult> {
     }
   } else {
     result.errors.push(`Unrecognized format — headers: ${headers.slice(0, 5).join(', ')}`);
+  }
+
+  // Flush to Redis (no TTL — EOD index data persists until next upload)
+  if (redisBuf.length > 0) {
+    const pipe = redis.pipeline();
+    for (const { key, val } of redisBuf) pipe.set(key, JSON.stringify(val));
+    await pipe.exec().catch(() => {});
   }
 
   return result;

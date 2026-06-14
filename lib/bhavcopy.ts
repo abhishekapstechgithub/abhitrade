@@ -5,6 +5,7 @@ import fs   from 'fs';
 import path from 'path';
 import { parse } from 'csv-parse/sync';
 import { getPool } from '@/lib/db/client';
+import { redis } from '@/lib/redis-client';
 
 export interface BhavcopyResult {
   file:    string;
@@ -153,6 +154,48 @@ FROM (
 WHERE sm.symbol = d.symbol AND (sm.series = d.series OR sm.series IS NULL)
 `;
 
+// ── Redis EOD cache sync ───────────────────────────────────────────────────────
+// After the Postgres UNNEST update, fetch the updated rows and write them to Redis
+// with no TTL so the data persists overnight until the next bhavcopy load.
+async function syncEodToRedis(pool: ReturnType<typeof getPool>, tokens: string[]): Promise<void> {
+  try {
+    const { rows } = await pool.query<{
+      symbol: string; exchange: string; token: string;
+      ltp: string; open_price: string; high_price: string; low_price: string;
+      close_price: string; prev_close: string; net_change: string;
+      change_pct: string; volume: string; price_date: string;
+    }>(`
+      SELECT symbol, exchange, token,
+             ltp, open_price, high_price, low_price, close_price,
+             prev_close, net_change, change_pct, volume, price_date
+      FROM security_master
+      WHERE token = ANY($1::TEXT[]) AND ltp IS NOT NULL
+        AND price_updated_at >= NOW() - INTERVAL '60 seconds'
+    `, [tokens]);
+    if (!rows.length) return;
+    const pipe = redis.pipeline();
+    for (const r of rows) {
+      const quote = {
+        symbol: r.symbol, exchange: r.exchange, token: r.token,
+        ltp:        r.ltp        ? parseFloat(r.ltp)        : null,
+        open:       r.open_price ? parseFloat(r.open_price) : null,
+        high:       r.high_price ? parseFloat(r.high_price) : null,
+        low:        r.low_price  ? parseFloat(r.low_price)  : null,
+        close:      r.close_price? parseFloat(r.close_price): null,
+        prevClose:  r.prev_close ? parseFloat(r.prev_close) : null,
+        netChange:  r.net_change ? parseFloat(r.net_change) : null,
+        changePct:  r.change_pct ? parseFloat(r.change_pct): null,
+        volume:     r.volume     ? parseInt(r.volume, 10)   : null,
+        date:       r.price_date,
+        source:     'eod',
+        updatedAt:  Date.now(),
+      };
+      pipe.set(`at:market:eod:${r.exchange}:${r.symbol.toUpperCase()}`, JSON.stringify(quote));
+    }
+    await pipe.exec();
+  } catch { /* non-fatal — Postgres is the source of truth */ }
+}
+
 function str(v: number | null): string {
   return v == null ? '' : String(v);
 }
@@ -226,6 +269,7 @@ async function processFile(filePath: string): Promise<BhavcopyResult> {
         ]);
         result.loaded  = res.rowCount ?? 0;
         result.skipped += tokens.length - result.loaded;
+        if (result.loaded > 0) syncEodToRedis(pool, tokens).catch(() => {});
       } catch (e) {
         result.errors.push((e as Error).message);
       }
@@ -271,6 +315,13 @@ async function processFile(filePath: string): Promise<BhavcopyResult> {
         ]);
         result.loaded  = res.rowCount ?? 0;
         result.skipped += symbols.length - result.loaded;
+        // Fetch updated tokens to sync to Redis (old format doesn't have tokens in CSV)
+        if (result.loaded > 0) {
+          pool.query<{ token: string }>(
+            `SELECT token FROM security_master WHERE symbol = ANY($1::TEXT[]) AND ltp IS NOT NULL`,
+            [symbols]
+          ).then(r => syncEodToRedis(pool, r.rows.map(x => x.token))).catch(() => {});
+        }
       } catch (e) {
         result.errors.push((e as Error).message);
       }

@@ -200,7 +200,7 @@ class LiveFeedManager {
     this.buffer.clear();
 
     // ── Redis pipeline ──────────────────────────────────────────────────────────
-    const TTL = 30; // 30 s TTL — refreshed on every flush
+    const TTL = 3600; // 1 h TTL — live prices survive between ticks & short outages
     const pipeline = redis.pipeline();
 
     for (const t of ticks) {
