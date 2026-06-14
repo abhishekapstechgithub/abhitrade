@@ -23,6 +23,7 @@ const PUBLIC_PATHS = [
   '/api/index-prices',
   '/api/market-sync',
   '/api/bhavcopy',
+  '/api/bhavcopy/auto',
   '/api/index-bhavcopy',
   '/api/yahoo-chart',
   '/api/chart',

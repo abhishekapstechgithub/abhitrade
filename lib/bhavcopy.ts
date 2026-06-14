@@ -84,17 +84,17 @@ function isNewFormat(headers: string[]): boolean {
 // New format: update by token using UNNEST (single round-trip)
 const BATCH_BY_TOKEN_SQL = `
 UPDATE security_master AS sm SET
-  ltp              = d.ltp::DECIMAL,
-  open_price       = d.open::DECIMAL,
-  high_price       = d.high::DECIMAL,
-  low_price        = d.low::DECIMAL,
-  close_price      = d.close::DECIMAL,
-  prev_close       = d.prev::DECIMAL,
-  net_change       = d.chg::DECIMAL,
-  change_pct       = d.pct::DECIMAL,
-  volume           = d.vol::BIGINT,
-  open_interest    = d.oi::BIGINT,
-  price_date       = d.dt::DATE,
+  ltp              = NULLIF(d.ltp,  '')::DECIMAL,
+  open_price       = NULLIF(d.open, '')::DECIMAL,
+  high_price       = NULLIF(d.high, '')::DECIMAL,
+  low_price        = NULLIF(d.low,  '')::DECIMAL,
+  close_price      = NULLIF(d.close,'')::DECIMAL,
+  prev_close       = NULLIF(d.prev, '')::DECIMAL,
+  net_change       = NULLIF(d.chg,  '')::DECIMAL,
+  change_pct       = NULLIF(d.pct,  '')::DECIMAL,
+  volume           = NULLIF(d.vol,  '')::BIGINT,
+  open_interest    = NULLIF(d.oi,   '')::BIGINT,
+  price_date       = NULLIF(d.dt,   '')::DATE,
   price_updated_at = NOW()
 FROM (
   SELECT
@@ -117,17 +117,17 @@ WHERE sm.token = d.token
 // Old format: update by symbol+series
 const BATCH_BY_SYMBOL_SQL = `
 UPDATE security_master AS sm SET
-  ltp              = d.ltp::DECIMAL,
-  open_price       = d.open::DECIMAL,
-  high_price       = d.high::DECIMAL,
-  low_price        = d.low::DECIMAL,
-  close_price      = d.close::DECIMAL,
-  prev_close       = d.prev::DECIMAL,
-  net_change       = d.chg::DECIMAL,
-  change_pct       = d.pct::DECIMAL,
-  volume           = d.vol::BIGINT,
+  ltp              = NULLIF(d.ltp,  '')::DECIMAL,
+  open_price       = NULLIF(d.open, '')::DECIMAL,
+  high_price       = NULLIF(d.high, '')::DECIMAL,
+  low_price        = NULLIF(d.low,  '')::DECIMAL,
+  close_price      = NULLIF(d.close,'')::DECIMAL,
+  prev_close       = NULLIF(d.prev, '')::DECIMAL,
+  net_change       = NULLIF(d.chg,  '')::DECIMAL,
+  change_pct       = NULLIF(d.pct,  '')::DECIMAL,
+  volume           = NULLIF(d.vol,  '')::BIGINT,
   open_interest    = NULL,
-  price_date       = d.dt::DATE,
+  price_date       = NULLIF(d.dt,   '')::DATE,
   price_updated_at = NOW()
 FROM (
   SELECT

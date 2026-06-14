@@ -81,7 +81,8 @@ async function getAccessToken(
 
     if (data.status && data.data?.jwtToken) {
       const accessToken = data.data.jwtToken;
-      const sess = { accessToken, expiresAt: Date.now() + SESSION_TTL_S * 1000 };
+      const feedToken   = (data.data as Record<string, string>).feedToken ?? '';
+      const sess = { accessToken, feedToken, clientCode: clientId, expiresAt: Date.now() + SESSION_TTL_S * 1000 };
       await redis.setex('at:market:session', SESSION_TTL_S, JSON.stringify(sess)).catch(() => {});
       return accessToken;
     }
