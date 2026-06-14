@@ -38,7 +38,7 @@ INSERT INTO index_prices
    prev_close, net_change, change_pct, volume, high_52w, low_52w,
    pe_ratio, pb_ratio, div_yield, price_updated_at)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW())
-ON CONFLICT (symbol, price_date) DO UPDATE SET
+ON CONFLICT (symbol, exchange, price_date) DO UPDATE SET
   open_price       = EXCLUDED.open_price,
   high_price       = EXCLUDED.high_price,
   low_price        = EXCLUDED.low_price,
@@ -54,6 +54,36 @@ ON CONFLICT (symbol, price_date) DO UPDATE SET
   div_yield        = EXCLUDED.div_yield,
   price_updated_at = NOW()
 `;
+
+let _tableDone = false;
+async function ensureTable(): Promise<void> {
+  if (_tableDone) return;
+  await getPool('live').query(`
+    CREATE TABLE IF NOT EXISTS index_prices (
+      id               BIGSERIAL     PRIMARY KEY,
+      symbol           VARCHAR(200)  NOT NULL,
+      exchange         VARCHAR(10)   NOT NULL DEFAULT 'NSE',
+      price_date       DATE          NOT NULL,
+      open_price       DECIMAL(12,2),
+      high_price       DECIMAL(12,2),
+      low_price        DECIMAL(12,2),
+      close_price      DECIMAL(12,2),
+      prev_close       DECIMAL(12,2),
+      net_change       DECIMAL(12,2),
+      change_pct       DECIMAL(10,4),
+      volume           BIGINT,
+      high_52w         DECIMAL(12,2),
+      low_52w          DECIMAL(12,2),
+      pe_ratio         DECIMAL(10,2),
+      pb_ratio         DECIMAL(10,2),
+      div_yield        DECIMAL(8,4),
+      price_updated_at TIMESTAMPTZ,
+      created_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+      UNIQUE (symbol, exchange, price_date)
+    )
+  `);
+  _tableDone = true;
+}
 
 function p(v: string | undefined): number | null {
   if (!v || v.trim() === '' || v === '-' || v.trim() === '-') return null;
@@ -186,6 +216,8 @@ async function processFile(filePath: string): Promise<IndexResult> {
 
 export async function loadIndexBhavcopy(dirOverride?: string): Promise<IndexStats> {
   const dir = dirOverride ?? path.join(process.cwd(), 'index');
+
+  await ensureTable().catch(() => {});
 
   if (!fs.existsSync(dir)) {
     return { files: 0, totalLoaded: 0, totalSkipped: 0, results: [] };
