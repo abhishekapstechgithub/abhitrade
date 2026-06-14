@@ -59,6 +59,19 @@ CREATE TABLE IF NOT EXISTS security_master (
   option_type      VARCHAR(5),                            -- CE / PE
   underlying       VARCHAR(100),                          -- NIFTY, BANKNIFTY …
   freeze_quantity  INTEGER,
+  -- EOD / bhavcopy price snapshot (populated by bhavcopy sync job)
+  ltp              DECIMAL(12,2),
+  open_price       DECIMAL(12,2),
+  high_price       DECIMAL(12,2),
+  low_price        DECIMAL(12,2),
+  close_price      DECIMAL(12,2),
+  prev_close       DECIMAL(12,2),
+  net_change       DECIMAL(12,2),
+  change_pct       DECIMAL(8,4),
+  volume           BIGINT,
+  open_interest    BIGINT,
+  price_date       DATE,
+  price_updated_at TIMESTAMPTZ,
   is_active        BOOLEAN      NOT NULL DEFAULT TRUE,
   created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
   updated_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
@@ -74,6 +87,7 @@ CREATE INDEX IF NOT EXISTS idx_sm_isin            ON security_master(isin)   WHE
 -- Full-text search on name + symbol
 CREATE INDEX IF NOT EXISTS idx_sm_fts ON security_master
   USING GIN(to_tsvector('english', coalesce(name,'') || ' ' || symbol));
+CREATE INDEX IF NOT EXISTS idx_sm_price_date ON security_master(price_date) WHERE price_date IS NOT NULL;
 
 -- =============================================================================
 -- UPLOAD JOBS

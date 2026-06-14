@@ -36,6 +36,10 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./lib/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
       - ./scripts/init-databases.sh:/docker-entrypoint-initdb.d/00_init.sh:ro
+      - ./scripts/migrate-password-nullable.sql:/docker-entrypoint-initdb.d/migrate-password-nullable.sql:ro
+      - ./scripts/migrate-market-movers.sql:/docker-entrypoint-initdb.d/migrate-market-movers.sql:ro
+      - ./scripts/migrate-market-movers-v2.sql:/docker-entrypoint-initdb.d/migrate-market-movers-v2.sql:ro
+      - ./scripts/migrate-bhavcopy-prices.sql:/docker-entrypoint-initdb.d/migrate-bhavcopy-prices.sql:ro
     restart: unless-stopped
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-tradekaro} -d abhitrade_live']
