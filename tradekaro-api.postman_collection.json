@@ -1,0 +1,1223 @@
+{
+  "info": {
+    "name": "TradeKaro API",
+    "description": "Complete API reference for the TradeKaro trading platform.\n\n## Setup\n1. Import this collection into Postman.\n2. Create an Environment with these variables:\n   - `baseUrl`      → `https://abhitrade.com`  (or `http://localhost:3000` for local dev)\n   - `accessToken`  → filled automatically by the Login request\n   - `watchlistId`  → fill after creating a watchlist\n   - `orderId`      → fill after placing an order\n   - `alertId`      → fill after creating an alert\n3. Run **Auth / Login** first — it auto-sets `accessToken` via a test script.\n4. All protected endpoints send `Authorization: Bearer {{accessToken}}`.\n\n## Authentication flow\n- Login → get `accessToken` (short-lived, 15 min) + `at_sid` cookie.\n- Use `POST /api/auth/refresh` to get a new accessToken when it expires.\n- The `at_sid` cookie is sent automatically by Postman (enable \"Automatically follow redirects\" and \"Send cookies\").\n\n## Live data (SSE)\n- `/api/market-stream` is a Server-Sent Events endpoint — use EventSource in Flutter, not a regular REST call.\n  See the SSE section for Flutter code examples.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl",     "value": "https://abhitrade.com", "type": "string" },
+    { "key": "accessToken", "value": "",                       "type": "string" },
+    { "key": "watchlistId", "value": "",                       "type": "string" },
+    { "key": "orderId",     "value": "",                       "type": "string" },
+    { "key": "alertId",     "value": "",                       "type": "string" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+  },
+  "item": [
+
+    {
+      "name": "🔐 Auth",
+      "description": "Registration, login, token refresh, profile, logout.",
+      "item": [
+
+        {
+          "name": "Register (OTP flow)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/auth/register",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Abhishek Yadav\",\n  \"email\": \"user@example.com\",\n  \"phone\": \"9876543210\"\n}"
+            },
+            "description": "Step 1 of OTP registration. Validates name, email, phone. Sends OTP to phone via SMS. Returns `{ message, phone }`. Follow with **Verify OTP**."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"message\": \"OTP sent to +91XXXXXXXXXX\",\n  \"phone\": \"9876543210\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Send OTP",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/auth/send-otp",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"9876543210\"\n}"
+            },
+            "description": "Re-send OTP to an existing phone number."
+          }
+        },
+
+        {
+          "name": "Verify OTP",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/auth/verify-otp",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"9876543210\",\n  \"otp\": \"123456\"\n}"
+            },
+            "description": "Step 2 of OTP flow. Returns `accessToken` + sets `at_sid` cookie."
+          }
+        },
+
+        {
+          "name": "Login (email + password)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.accessToken) {",
+                  "  pm.collectionVariables.set('accessToken', json.accessToken);",
+                  "  pm.environment.set('accessToken', json.accessToken);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"yourpassword\"\n}"
+            },
+            "description": "Login with email and password. The test script auto-saves `accessToken` to the collection variable.\n\nReturns:\n- `accessToken` (JWT, 15 min)\n- `user` object\n- Sets `at_sid` httpOnly cookie (refresh token, 30 days)"
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"accessToken\": \"eyJhbGciOiJIUzI1NiJ9...\",\n  \"user\": {\n    \"id\": \"uuid\",\n    \"email\": \"user@example.com\",\n    \"name\": \"Abhishek Yadav\"\n  }\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Refresh Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.accessToken) {",
+                  "  pm.collectionVariables.set('accessToken', json.accessToken);",
+                  "  pm.environment.set('accessToken', json.accessToken);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/auth/refresh",
+            "description": "Uses the `at_sid` httpOnly cookie (sent automatically by Postman). Returns a new `accessToken`. Call this when you get a 401 on any protected endpoint."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"accessToken\": \"eyJhbGciOiJIUzI1NiJ9...\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Get Current User (me)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/auth/me",
+            "description": "Returns the authenticated user profile. Requires valid `accessToken`."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"user\": {\n    \"id\": \"uuid\",\n    \"email\": \"user@example.com\",\n    \"name\": \"Abhishek Yadav\",\n    \"phone\": \"9876543210\",\n    \"kycStatus\": \"pending\"\n  }\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/auth/logout",
+            "description": "Invalidates the session. Clears `at_sid` cookie."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "code": 200,
+              "body": "{ \"ok\": true }"
+            }
+          ]
+        }
+
+      ]
+    },
+
+    {
+      "name": "📈 Market Data",
+      "description": "Quotes, live stream, index prices, gainers/losers, market movers.",
+      "item": [
+
+        {
+          "name": "Search Instruments",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/search?q=RELIANCE&exchange=all&type=all&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "search"],
+              "query": [
+                { "key": "q",        "value": "RELIANCE",  "description": "Search term — symbol, name, or partial match (min 1 char)" },
+                { "key": "exchange", "value": "all",        "description": "NSE | BSE | all" },
+                { "key": "type",     "value": "all",        "description": "EQ | FUT | CE | PE | IDX | all" },
+                { "key": "limit",    "value": "20",         "description": "Max results (1–50)" }
+              ]
+            },
+            "description": "Search for any instrument — equities, futures, options, indices.\n\n**Flow:**\n1. Redis metadata cache (5 min TTL)\n2. PostgreSQL `security_master` full-text search\n3. For every result, pipeline-fetches live Redis LTP to overlay current price\n\n**Price sources:**\n- `priceSource: \"live\"` → AngelOne WS tick (market hours)\n- `priceSource: \"eod\"` → Last bhavcopy upload\n- No price → security master not yet uploaded"
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "code": 200,
+              "body": "{\n  \"results\": [\n    {\n      \"token\": \"2885\",\n      \"exchange\": \"NSE\",\n      \"symbol\": \"RELIANCE\",\n      \"tradingSymbol\": \"RELIANCE\",\n      \"name\": \"Reliance Industries Ltd\",\n      \"instrumentType\": \"EQ\",\n      \"lotSize\": 1,\n      \"ltp\": 2945.50,\n      \"open\": 2930.00,\n      \"high\": 2960.00,\n      \"low\": 2920.00,\n      \"prevClose\": 2940.00,\n      \"netChange\": 5.50,\n      \"changePct\": 0.1871,\n      \"volume\": 4521000,\n      \"priceDate\": \"2026-06-14\",\n      \"priceSource\": \"live\"\n    }\n  ],\n  \"total\": 1,\n  \"source\": \"redis-cache\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Get Quote",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/quote?symbol=RELIANCE&exchange=NSE",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "quote"],
+              "query": [
+                { "key": "symbol",   "value": "RELIANCE", "description": "Instrument symbol (uppercase)" },
+                { "key": "exchange", "value": "NSE",       "description": "NSE | BSE" }
+              ]
+            },
+            "description": "Single instrument quote with full OHLCV.\n\n**Priority chain:**\n1. `at:market:quote:{exchange}:{symbol}` — Redis live (AngelOne WS, TTL 1h)\n2. `at:market:eod:{exchange}:{symbol}` — Redis EOD (bhavcopy, no TTL)\n3. `market_quotes` table — DB live sync\n4. `security_master` table — DB EOD bhavcopy prices\n\nReturns `source: 'live' | 'eod' | 'db-live' | 'db-eod' | 'unavailable'`"
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "code": 200,
+              "body": "{\n  \"symbol\": \"RELIANCE\",\n  \"exchange\": \"NSE\",\n  \"ltp\": 2945.50,\n  \"open\": 2930.00,\n  \"high\": 2960.00,\n  \"low\": 2920.00,\n  \"close\": 2940.00,\n  \"netChange\": 5.50,\n  \"percentChange\": 0.1871,\n  \"volume\": 4521000,\n  \"week52High\": 3217.00,\n  \"week52Low\": 2220.30,\n  \"updatedAt\": \"2026-06-14T10:30:00.000Z\",\n  \"source\": \"live\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Market Stream (SSE — use EventSource)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "text/event-stream" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/market-stream?symbols=NSE:NIFTY50,NSE:RELIANCE,BSE:SENSEX",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "market-stream"],
+              "query": [
+                { "key": "symbols", "value": "NSE:NIFTY50,NSE:RELIANCE,BSE:SENSEX", "description": "Comma-separated list in format EXCHANGE:SYMBOL. Use NSE: or BSE: prefix. If no prefix, defaults to NSE." }
+              ]
+            },
+            "description": "**Server-Sent Events (SSE) — NOT a regular REST call.**\n\nPostman will show a streaming response but Flutter/Dart should use `EventSource` or `http` with streaming.\n\n**Behavior:**\n- Sends initial snapshot immediately on connect\n- Polls Redis every 1.5 s, pushes only changed quotes\n- Keep-alive `: ping` comment every 15 s\n- No auth required (public)\n- Behind nginx with `proxy_buffering off` and 3600 s timeout\n\n**Flutter/Dart usage:**\n```dart\nimport 'package:http/http.dart' as http;\n\nfinal uri = Uri.parse(\n  'https://abhitrade.com/api/market-stream'\n  '?symbols=NSE:NIFTY50,NSE:RELIANCE,BSE:SENSEX'\n);\nfinal request = http.Request('GET', uri);\nfinal response = await http.Client().send(request);\nresponse.stream\n  .transform(utf8.decoder)\n  .transform(const LineSplitter())\n  .listen((line) {\n    if (line.startsWith('data: ')) {\n      final data = jsonDecode(line.substring(6)) as List;\n      for (final quote in data) {\n        // { symbol, exchange, ltp, open, high, low, close, netChange, changePct, source }\n      }\n    }\n  });\n```\n\n**Event format:**\n```\ndata: [{\"symbol\":\"RELIANCE\",\"exchange\":\"NSE\",\"ltp\":2945.5,\"open\":2930,\"high\":2960,\"low\":2920,\"close\":2940,\"netChange\":5.5,\"changePct\":0.1871,\"volume\":4521000,\"source\":\"live\",\"updatedAt\":1718000000000}]\n```"
+          }
+        },
+
+        {
+          "name": "Index Prices (NIFTY / SENSEX / BANKNIFTY)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/index-prices",
+            "description": "Returns NIFTY 50, NIFTY BANK, SENSEX, FINNIFTY, MIDCPNIFTY live/EOD prices from Redis.\nUpdated every 60 s by the background market-sync job."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "code": 200,
+              "body": "{\n  \"prices\": {\n    \"NIFTY 50\": { \"ltp\": 23214.95, \"open\": 23233.95, \"high\": 23425.35, \"low\": 23184.60, \"change\": -27.15, \"changePct\": -0.12 },\n    \"NIFTY BANK\": { \"ltp\": 52100.00, \"open\": 51900.00, \"high\": 52300.00, \"low\": 51800.00, \"change\": 200.00, \"changePct\": 0.38 },\n    \"SENSEX\": { \"ltp\": 73983.18, \"open\": 73988.27, \"high\": 74613.01, \"low\": 73897.57, \"change\": 64.42, \"changePct\": 0.09 }\n  }\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Market Movers",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/market-movers?type=gainers&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "market-movers"],
+              "query": [
+                { "key": "type",  "value": "gainers", "description": "gainers | losers | volume_shockers | top_by_volume | 52w_high | 52w_low" },
+                { "key": "limit", "value": "20",       "description": "Max rows (1–50)" }
+              ]
+            },
+            "description": "Top gainers/losers/volume shockers from Groww, updated every 60 s during market hours. Auto-triggers background refresh if data is stale."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "code": 200,
+              "body": "{\n  \"movers\": [\n    { \"symbol\": \"RELIANCE\", \"name\": \"Reliance Industries\", \"ltp\": 2945.50, \"change\": 5.50, \"changePct\": 0.19, \"volume\": 4521000, \"exchange\": \"NSE\" }\n  ],\n  \"type\": \"gainers\",\n  \"source\": \"redis\",\n  \"updatedAt\": \"2026-06-14T10:30:00Z\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Gainers & Losers",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/gainers-losers?limit=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "gainers-losers"],
+              "query": [
+                { "key": "limit", "value": "10", "description": "Stocks per category" }
+              ]
+            },
+            "description": "Returns top gainers and top losers together in one call. Useful for dashboard summary card."
+          }
+        },
+
+        {
+          "name": "Bulk Live Quotes (AngelOne)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/market-data",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tokens\": [\n    { \"exchange\": \"NSE\", \"token\": \"2885\" },\n    { \"exchange\": \"NSE\", \"token\": \"1594\" },\n    { \"exchange\": \"NSE\", \"token\": \"99926000\", \"instrumentType\": \"INDEX\" }\n  ],\n  \"mode\": \"FULL\"\n}"
+            },
+            "description": "Bulk real-time quote from AngelOne REST API. Requires active AngelOne session.\n\n`mode`: `LTP` (just last price) | `OHLC` | `FULL` (default, includes OI, bid/ask, circuit limits)\n\nTokens are AngelOne instrument tokens — get them from `/api/search` or `/api/scrips`."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "code": 200,
+              "body": "{\n  \"quotes\": {\n    \"2885\": {\n      \"token\": \"2885\",\n      \"exchange\": \"NSE\",\n      \"tradingSymbol\": \"RELIANCE\",\n      \"ltp\": 2945.50,\n      \"open\": 2930.00,\n      \"high\": 2960.00,\n      \"low\": 2920.00,\n      \"close\": 2940.00,\n      \"netChange\": 5.50,\n      \"percentChange\": 0.19,\n      \"volume\": 4521000,\n      \"oi\": 0,\n      \"bid\": 2945.00,\n      \"ask\": 2945.50\n    }\n  }\n}"
+            }
+          ]
+        }
+
+      ]
+    },
+
+    {
+      "name": "📊 Option Chain",
+      "description": "Option chain, expiry dates, live OI/IV streaming.",
+      "item": [
+
+        {
+          "name": "Get Option Chain",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/optionchain?symbol=NIFTY&expiry=2026-06-26&strikeCount=15",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "optionchain"],
+              "query": [
+                { "key": "symbol",      "value": "NIFTY",      "description": "NIFTY | BANKNIFTY | FINNIFTY | MIDCPNIFTY | RELIANCE | any F&O stock (required)" },
+                { "key": "expiry",      "value": "2026-06-26", "description": "Expiry date YYYY-MM-DD (required)" },
+                { "key": "strikeCount", "value": "15",          "description": "Strikes each side of ATM (default 15)" },
+                { "key": "fromStrike",  "value": "",            "description": "Custom range start (optional)" },
+                { "key": "toStrike",    "value": "",            "description": "Custom range end (optional)" }
+              ]
+            },
+            "description": "Full option chain for an underlying and expiry date.\n\n**Response includes per strike:**\n- CE and PE: LTP, bid, ask, IV, OI, change in OI, volume, delta, gamma, theta, vega\n- PCR (Put-Call Ratio), ATM strike, underlying LTP\n- Cached in Redis for 5 s\n\n**Requires:** Security master uploaded + bhavcopy or live WS prices."
+          },
+          "response": [
+            {
+              "name": "200 OK (truncated)",
+              "code": 200,
+              "body": "{\n  \"symbol\": \"NIFTY\",\n  \"expiry\": \"2026-06-26\",\n  \"underlyingLtp\": 23214.95,\n  \"atmStrike\": 23200,\n  \"pcr\": 0.87,\n  \"strikes\": [\n    {\n      \"strike\": 23200,\n      \"ce\": { \"ltp\": 145.50, \"iv\": 12.4, \"oi\": 1250000, \"oiChange\": 45000, \"volume\": 125000, \"delta\": 0.51, \"theta\": -8.2 },\n      \"pe\": { \"ltp\": 130.20, \"iv\": 12.1, \"oi\": 1080000, \"oiChange\": -30000, \"volume\": 98000, \"delta\": -0.49, \"theta\": -7.9 }\n    }\n  ],\n  \"source\": \"redis-chain\",\n  \"generatedAt\": \"2026-06-14T10:30:00.000Z\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Get Option Expiries",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/optionchain/expiries?symbol=NIFTY",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "optionchain", "expiries"],
+              "query": [
+                { "key": "symbol", "value": "NIFTY", "description": "Underlying symbol" }
+              ]
+            },
+            "description": "Returns sorted list of all available expiry dates for the given underlying. Pull this first to populate the expiry dropdown."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "code": 200,
+              "body": "{\n  \"symbol\": \"NIFTY\",\n  \"expiries\": [\"2026-06-19\", \"2026-06-26\", \"2026-07-31\", \"2026-08-27\"],\n  \"nearest\": \"2026-06-19\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Option Chain OI Stream (SSE)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "text/event-stream" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/optionchain/stream?symbol=NIFTY&expiry=2026-06-26",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "optionchain", "stream"],
+              "query": [
+                { "key": "symbol", "value": "NIFTY" },
+                { "key": "expiry", "value": "2026-06-26" }
+              ]
+            },
+            "description": "SSE stream for live option chain updates. Same as market-stream but optimized for option chains — streams CE/PE LTP and OI changes every 2 s."
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "📋 Instruments",
+      "description": "Security master lookup, scrips, instrument detail.",
+      "item": [
+
+        {
+          "name": "Get Instrument by Token",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/instruments/2885?exchange=NSE",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "instruments", "2885"],
+              "query": [
+                { "key": "exchange", "value": "NSE", "description": "NSE | BSE" }
+              ]
+            },
+            "description": "Look up full instrument metadata by AngelOne token.\nChecks Redis first, falls back to PostgreSQL security_master."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "code": 200,
+              "body": "{\n  \"instrument\": {\n    \"token\": \"2885\",\n    \"exchange\": \"NSE\",\n    \"symbol\": \"RELIANCE\",\n    \"tradingSymbol\": \"RELIANCE\",\n    \"name\": \"Reliance Industries Ltd\",\n    \"instrumentType\": \"EQ\",\n    \"lotSize\": 1,\n    \"tickSize\": \"0.05\",\n    \"isin\": \"INE002A01018\"\n  },\n  \"source\": \"redis\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "List Scrips (from Redis)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/scrips?exchange=NSE&type=EQ&limit=100&offset=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "scrips"],
+              "query": [
+                { "key": "exchange", "value": "NSE",  "description": "NSE | BSE" },
+                { "key": "type",     "value": "EQ",   "description": "EQ | FUT | CE | PE | IDX" },
+                { "key": "limit",    "value": "100",  "description": "Page size (max 500)" },
+                { "key": "offset",   "value": "0",    "description": "Pagination offset" }
+              ]
+            },
+            "description": "Returns instrument list from Redis security master index.\nUseful for pre-loading scrip data in the Flutter app startup."
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "📉 Charts",
+      "description": "Candle data, chart URLs.",
+      "item": [
+
+        {
+          "name": "AngelOne Candle Data",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/angel-one/candles",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"apiKey\": \"your_angelone_api_key\",\n  \"accessToken\": \"{{accessToken}}\",\n  \"exchange\": \"NSE\",\n  \"symboltoken\": \"2885\",\n  \"timeframe\": \"1D\"\n}"
+            },
+            "description": "Fetch OHLCV candle data from AngelOne for any timeframe.\n\n`timeframe` options: `1m`, `3m`, `5m`, `15m`, `30m`, `1h`, `1D`, `1W`, `1M`\n\nReturns array of `[timestamp, open, high, low, close, volume]` tuples."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "code": 200,
+              "body": "{\n  \"candles\": [\n    [\"2026-06-14T09:15:00+05:30\", 2930.00, 2960.00, 2920.00, 2945.50, 452100],\n    [\"2026-06-13T09:15:00+05:30\", 2900.00, 2940.00, 2895.00, 2935.00, 512300]\n  ],\n  \"interval\": \"ONE_DAY\",\n  \"from\": \"2025-06-14\",\n  \"to\": \"2026-06-14\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Yahoo Finance Chart Data",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/yahoo-chart?symbol=RELIANCE&exchange=NSE&timeframe=1D",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "yahoo-chart"],
+              "query": [
+                { "key": "symbol",    "value": "RELIANCE", "description": "NSE symbol or index name (NIFTY, BANKNIFTY, SENSEX)" },
+                { "key": "exchange",  "value": "NSE",       "description": "NSE | BSE" },
+                { "key": "timeframe", "value": "1D",        "description": "1m | 5m | 15m | 1h | 1D | 1W | 1M" }
+              ]
+            },
+            "description": "Proxy to Yahoo Finance chart data. Works for equities and indices (auto-maps NIFTY→^NSEI, SENSEX→^BSESN, BANKNIFTY→^NSEBANK etc.). No auth required. Useful fallback when AngelOne candles are unavailable."
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "👁 Watchlists",
+      "description": "Create, manage, and populate multiple watchlists. All endpoints require authentication.",
+      "item": [
+
+        {
+          "name": "Get All Watchlists",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/watchlists",
+            "description": "Returns all watchlists owned by the authenticated user."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "code": 200,
+              "body": "{\n  \"watchlists\": [\n    { \"id\": \"uuid\", \"name\": \"My Stocks\", \"sort_order\": 0, \"created_at\": \"2026-06-01T10:00:00Z\" }\n  ]\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Create Watchlist",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j = pm.response.json();",
+                  "if (j.watchlist?.id) pm.collectionVariables.set('watchlistId', j.watchlist.id);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/watchlists",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Intraday Picks\"\n}"
+            },
+            "description": "Create a new watchlist. Auto-saves ID to `watchlistId` variable."
+          }
+        },
+
+        {
+          "name": "Rename / Update Watchlist",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/watchlists/{{watchlistId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Delivery Picks\"\n}"
+            }
+          }
+        },
+
+        {
+          "name": "Delete Watchlist",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/api/watchlists/{{watchlistId}}"
+          }
+        },
+
+        {
+          "name": "Get Watchlist Items",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/watchlists/{{watchlistId}}/items",
+            "description": "Returns all instruments in the watchlist."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "code": 200,
+              "body": "{\n  \"items\": [\n    {\n      \"id\": \"uuid\",\n      \"symbol\": \"RELIANCE\",\n      \"exchange\": \"NSE\",\n      \"token\": \"2885\",\n      \"trading_symbol\": \"RELIANCE\",\n      \"instrument_type\": \"EQ\",\n      \"sort_order\": 0,\n      \"added_at\": \"2026-06-14T10:00:00Z\"\n    }\n  ]\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Add Item to Watchlist",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/watchlists/{{watchlistId}}/items",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"RELIANCE\",\n  \"exchange\": \"NSE\",\n  \"token\": \"2885\",\n  \"trading_symbol\": \"RELIANCE\",\n  \"instrument_type\": \"EQ\"\n}"
+            },
+            "description": "Add a stock/instrument to the watchlist. Returns 409 if already present."
+          }
+        },
+
+        {
+          "name": "Remove Item from Watchlist",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/api/watchlists/{{watchlistId}}/items/ITEM_UUID_HERE",
+            "description": "Remove a specific item by its UUID (from the items list)."
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "📦 Orders",
+      "description": "Place, view, modify, and cancel orders.",
+      "item": [
+
+        {
+          "name": "Get Orders",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orders?status=pending&limit=50&offset=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "orders"],
+              "query": [
+                { "key": "status", "value": "pending", "description": "pending | completed | cancelled | rejected | all (default: all)" },
+                { "key": "limit",  "value": "50",       "description": "Page size (max 200)" },
+                { "key": "offset", "value": "0",         "description": "Pagination offset" }
+              ]
+            },
+            "description": "List all orders for the authenticated user."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "code": 200,
+              "body": "{\n  \"orders\": [\n    {\n      \"id\": \"uuid\",\n      \"symbol\": \"RELIANCE\",\n      \"exchange\": \"NSE\",\n      \"transaction_type\": \"BUY\",\n      \"order_type\": \"LIMIT\",\n      \"product_type\": \"CNC\",\n      \"quantity\": 10,\n      \"price\": 2940.00,\n      \"status\": \"pending\",\n      \"created_at\": \"2026-06-14T10:00:00Z\"\n    }\n  ],\n  \"total\": 1,\n  \"limit\": 50,\n  \"offset\": 0\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Place Order",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j = pm.response.json();",
+                  "if (j.order?.id) pm.collectionVariables.set('orderId', j.order.id);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/orders",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"exchange\": \"NSE\",\n  \"symbol\": \"RELIANCE\",\n  \"token\": \"2885\",\n  \"trading_symbol\": \"RELIANCE\",\n  \"transaction_type\": \"BUY\",\n  \"order_type\": \"LIMIT\",\n  \"product_type\": \"CNC\",\n  \"quantity\": 10,\n  \"price\": 2940.00,\n  \"trigger_price\": null,\n  \"validity\": \"DAY\",\n  \"is_paper\": false\n}"
+            },
+            "description": "Place a new order.\n\n**Required fields:** `exchange`, `symbol`, `transaction_type`, `order_type`, `product_type`, `quantity`\n\n**transaction_type:** `BUY` | `SELL`\n**order_type:** `MARKET` | `LIMIT` | `SL` | `SL-M` | `BO` | `CO`\n**product_type:** `CNC` (delivery) | `MIS` (intraday) | `NRML` (F&O)\n**validity:** `DAY` | `IOC` | `GTC`\n**is_paper:** `true` for paper trading, `false` for real (default false)"
+          },
+          "response": [
+            {
+              "name": "201 Created",
+              "status": "Created",
+              "code": 201,
+              "body": "{\n  \"order\": {\n    \"id\": \"uuid\",\n    \"symbol\": \"RELIANCE\",\n    \"exchange\": \"NSE\",\n    \"transaction_type\": \"BUY\",\n    \"status\": \"pending\",\n    \"quantity\": 10,\n    \"price\": 2940.00\n  }\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Modify Order",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/orders/{{orderId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"price\": 2935.00,\n  \"quantity\": 5\n}"
+            },
+            "description": "Modify price or quantity of a pending order."
+          }
+        },
+
+        {
+          "name": "Cancel Order",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/api/orders/{{orderId}}",
+            "description": "Cancel a pending order. Sets status to `cancelled`."
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "📍 Positions & Holdings",
+      "description": "Current positions and delivery holdings.",
+      "item": [
+
+        {
+          "name": "Get Positions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/positions?date=2026-06-14",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "positions"],
+              "query": [
+                { "key": "date", "value": "2026-06-14", "description": "Filter by date YYYY-MM-DD (optional, defaults to today)" }
+              ]
+            },
+            "description": "Returns open positions for the user. Includes buy/sell average, P&L, MTM."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "code": 200,
+              "body": "{\n  \"positions\": [\n    {\n      \"id\": \"uuid\",\n      \"symbol\": \"RELIANCE\",\n      \"exchange\": \"NSE\",\n      \"quantity\": 10,\n      \"buy_qty\": 10,\n      \"sell_qty\": 0,\n      \"avg_price\": 2940.00,\n      \"ltp\": 2945.50,\n      \"pnl\": 55.00,\n      \"pnl_pct\": 0.19,\n      \"product_type\": \"MIS\"\n    }\n  ]\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Get Holdings",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/holdings",
+            "description": "Returns delivery holdings (CNC positions). Includes average price, current value, unrealised P&L."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "code": 200,
+              "body": "{\n  \"holdings\": [\n    {\n      \"symbol\": \"RELIANCE\",\n      \"exchange\": \"NSE\",\n      \"quantity\": 50,\n      \"avg_price\": 2850.00,\n      \"ltp\": 2945.50,\n      \"current_value\": 147275.00,\n      \"invested_value\": 142500.00,\n      \"pnl\": 4775.00,\n      \"pnl_pct\": 3.35\n    }\n  ]\n}"
+            }
+          ]
+        }
+
+      ]
+    },
+
+    {
+      "name": "🔔 Alerts",
+      "description": "Price alerts — create, list, update, delete.",
+      "item": [
+
+        {
+          "name": "Get Alerts",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?status=active",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "alerts"],
+              "query": [
+                { "key": "status", "value": "active", "description": "active | triggered | cancelled | all" }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "code": 200,
+              "body": "{\n  \"alerts\": [\n    {\n      \"id\": \"uuid\",\n      \"symbol\": \"RELIANCE\",\n      \"exchange\": \"NSE\",\n      \"condition\": \"above\",\n      \"target_value\": 3000.00,\n      \"status\": \"active\",\n      \"note\": \"Breakout target\",\n      \"created_at\": \"2026-06-14T10:00:00Z\"\n    }\n  ]\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Create Alert",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const j = pm.response.json();",
+                  "if (j.alert?.id) pm.collectionVariables.set('alertId', j.alert.id);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/alerts",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"exchange\": \"NSE\",\n  \"symbol\": \"RELIANCE\",\n  \"condition\": \"above\",\n  \"target_value\": 3000.00,\n  \"note\": \"Breakout target\"\n}"
+            },
+            "description": "Create a price alert.\n\n**Required:** `exchange`, `symbol`, `condition`, `target_value`\n**condition:** `above` | `below` | `crosses`\n**note:** optional free-text note"
+          }
+        },
+
+        {
+          "name": "Update Alert",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/alerts/{{alertId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"target_value\": 3050.00,\n  \"status\": \"active\"\n}"
+            }
+          }
+        },
+
+        {
+          "name": "Delete Alert",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/api/alerts/{{alertId}}"
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "🤝 AngelOne Direct",
+      "description": "Direct AngelOne broker integration — portfolio, positions, profile, margin, orderbook. These call AngelOne API on your behalf.",
+      "item": [
+
+        {
+          "name": "Connect / Login AngelOne",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/angel-one/connect",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Triggers AngelOne login using server-side credentials (`ANGELONE_CLIENT_ID`, `ANGELONE_PASSWORD`, `ANGELONE_TOTP_SECRET` from `.env.local`). Caches `accessToken` + `feedToken` in Redis session. No body needed — credentials are server-side only."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "code": 200,
+              "body": "{\n  \"ok\": true,\n  \"clientCode\": \"A123456\",\n  \"expiresAt\": \"2026-06-14T16:00:00.000Z\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Get AngelOne Profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/angel-one/profile",
+            "description": "Returns AngelOne broker profile (name, PAN, email, segments, exchanges)."
+          }
+        },
+
+        {
+          "name": "Get AngelOne Portfolio",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/angel-one/portfolio",
+            "description": "Returns delivery holdings from AngelOne broker account."
+          }
+        },
+
+        {
+          "name": "Get AngelOne Positions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/angel-one/positions",
+            "description": "Returns today's open positions from AngelOne broker."
+          }
+        },
+
+        {
+          "name": "Get AngelOne Margin",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/angel-one/margin",
+            "description": "Returns available margin, used margin, and net balance from AngelOne."
+          }
+        },
+
+        {
+          "name": "Get AngelOne Order Book",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/angel-one/orderbook",
+            "description": "Returns today's orders from AngelOne broker."
+          }
+        },
+
+        {
+          "name": "Get AngelOne LTP",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/angel-one/ltp",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"exchange\": \"NSE\",\n  \"tradingsymbol\": \"RELIANCE\",\n  \"symboltoken\": \"2885\"\n}"
+            },
+            "description": "Get LTP for a single instrument directly from AngelOne."
+          }
+        },
+
+        {
+          "name": "AngelOne Quotes",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/angel-one/quotes",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mode\": \"FULL\",\n  \"exchangeTokens\": {\n    \"NSE\": [\"2885\", \"1594\"],\n    \"NFO\": [\"67145\"]\n  }\n}"
+            },
+            "description": "Batch quotes directly from AngelOne Smart API.\n`mode`: `LTP` | `OHLC` | `FULL`"
+          }
+        },
+
+        {
+          "name": "AngelOne Search",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/angel-one/search?q=RELIANCE&exchange=NSE",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "angel-one", "search"],
+              "query": [
+                { "key": "q",        "value": "RELIANCE" },
+                { "key": "exchange", "value": "NSE" }
+              ]
+            },
+            "description": "Search instruments using AngelOne Smart API search."
+          }
+        },
+
+        {
+          "name": "Place Order via AngelOne",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/angel-one/place-order",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"apiKey\": \"your_api_key\",\n  \"accessToken\": \"angelone_access_token\",\n  \"order\": {\n    \"variety\": \"NORMAL\",\n    \"tradingsymbol\": \"RELIANCE\",\n    \"symboltoken\": \"2885\",\n    \"transactiontype\": \"BUY\",\n    \"exchange\": \"NSE\",\n    \"ordertype\": \"LIMIT\",\n    \"producttype\": \"DELIVERY\",\n    \"duration\": \"DAY\",\n    \"price\": \"2940\",\n    \"squareoff\": \"0\",\n    \"stoploss\": \"0\",\n    \"quantity\": \"10\"\n  }\n}"
+            },
+            "description": "Place an order directly via AngelOne Smart API. Requires `apiKey` and `accessToken` from AngelOne (not TradeKaro auth)."
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "⚙️ Admin / Data Management",
+      "description": "Bhavcopy upload, security master, Redis management. Mostly for admin/internal use.",
+      "item": [
+
+        {
+          "name": "Health Check",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/health",
+            "description": "Returns service health: PostgreSQL and Redis connectivity, AngelOne WS status."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "code": 200,
+              "body": "{\n  \"status\": \"ok\",\n  \"services\": {\n    \"postgres_live\": \"connected\",\n    \"redis\": \"connected\",\n    \"angelone_ws\": \"connected\"\n  },\n  \"uptime\": 3600\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Upload Bhavcopy CSVs",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/bhavcopy/upload",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": [],  "description": "NSE/BSE CM or FO bhavcopy CSV (multi-file supported)" }
+              ]
+            },
+            "description": "Upload EOD bhavcopy CSV files (multipart).\n\n**Supported formats:**\n- `BhavCopy_NSE_CM_0_0_0_YYYYMMDD_F_0000.csv` (NSE equities)\n- `BhavCopy_NSE_FO_0_0_0_YYYYMMDD_F_0000.csv` (NSE F&O)\n- `BhavCopy_BSE_CM_0_0_0_YYYYMMDD_F_0000.csv` (BSE equities)\n- `BhavCopy_BSE_FO_0_0_0_YYYYMMDD_F_0000.csv` (BSE F&O)\n- Old NSE EQ format (`cm*.csv`)\n\nAfter loading into Postgres, prices are automatically synced to Redis (`at:market:eod:*` keys, no TTL)."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "code": 200,
+              "body": "{\n  \"files\": 3,\n  \"totalLoaded\": 3396,\n  \"totalSkipped\": 44,\n  \"results\": [\n    { \"file\": \"BhavCopy_NSE_CM_0_0_0_20260614_F_0000.csv\", \"loaded\": 3396, \"skipped\": 0, \"errors\": [], \"date\": \"2026-06-14\" },\n    { \"file\": \"BhavCopy_NSE_FO_0_0_0_20260614_F_0000.csv\", \"loaded\": 0, \"skipped\": 41508, \"errors\": [], \"date\": \"2026-06-14\" }\n  ],\n  \"loadedAt\": \"2026-06-14T16:00:00.000Z\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Bhavcopy Load Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/bhavcopy",
+            "description": "Returns status of the last bhavcopy load from Redis."
+          }
+        },
+
+        {
+          "name": "Load Bhavcopy from Server Dir",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/bhavcopy",
+            "description": "Triggers reload of all CSV files already in the server's `Bhavcopy/` directory without re-uploading."
+          }
+        },
+
+        {
+          "name": "Auto-Download Today's Bhavcopy",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/bhavcopy/auto",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "bhavcopy", "auto"]
+            },
+            "description": "Triggers auto-download of today's NSE CM bhavcopy from NSE archives. Normally runs automatically at 3:45 PM IST Mon–Fri. Use this for manual trigger or catch-up."
+          }
+        },
+
+        {
+          "name": "Auto-Download Specific Date Bhavcopy",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/bhavcopy/auto?date=2026-06-13",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "bhavcopy", "auto"],
+              "query": [
+                { "key": "date", "value": "2026-06-13", "description": "Date to download YYYY-MM-DD" }
+              ]
+            }
+          }
+        },
+
+        {
+          "name": "Upload Index Bhavcopy CSVs",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/index-bhavcopy/upload",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": [], "description": "NSE ind_close_all_*.csv or BSE INDEXSummary_*.csv" }
+              ]
+            },
+            "description": "Upload NSE/BSE index bhavcopy files.\n\n**NSE format:** `ind_close_all_DDMMYYYY.csv`\n- Columns: `Index Name, Index Date, Open Index Value, High Index Value, Low Index Value, Closing Index Value, Points Change, Change(%), Volume, P/E, P/B, Div Yield`\n\n**BSE format:** `INDEXSummary_DDMMYYYY.csv`\n- Columns: `IndexCode, IndexID, IndexName, PreviousClose, OpenPrice, HighPrice, LowPrice, ClosePrice, 52weeksHigh, 52weeksLow`\n\nAfter Postgres upsert, index prices are synced to Redis (`at:market:eod:*` keys)."
+          }
+        },
+
+        {
+          "name": "Index Bhavcopy Load Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/index-bhavcopy"
+          }
+        },
+
+        {
+          "name": "Upload Security Master",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/upload",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": [], "description": "AngelOne or NSE security master CSV/JSON/ZIP" }
+              ]
+            },
+            "description": "Upload the instrument/security master file. This populates `security_master` table and Redis search index. Download the file from AngelOne: https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
+          }
+        },
+
+        {
+          "name": "Upload Job Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/upload/status/JOB_ID_HERE",
+            "description": "Poll the status of a security master upload job by job UUID."
+          }
+        },
+
+        {
+          "name": "Market Sync (force refresh)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/market-sync",
+            "description": "Triggers an immediate AngelOne market data sync (index quotes + all watched symbols). Normally runs automatically every 4 h."
+          }
+        },
+
+        {
+          "name": "Market Sync Status",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/market-sync/data",
+            "description": "Returns last sync metadata — when it ran, what was updated."
+          }
+        },
+
+        {
+          "name": "WebSocket Credentials",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/ws-credentials",
+            "description": "Returns AngelOne feedToken and clientCode needed to connect the browser-side WebSocket (for option chain real-time). These are short-lived tokens cached in Redis."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "code": 200,
+              "body": "{\n  \"feedToken\": \"eyJhbGci...\",\n  \"clientCode\": \"A123456\",\n  \"apiKey\": \"xxxx\"\n}"
+            }
+          ]
+        },
+
+        {
+          "name": "Redis Stats",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/redis-stats",
+            "description": "Returns Redis key counts, memory usage, and key distribution."
+          }
+        },
+
+        {
+          "name": "Debug Redis (inspect key)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/debug-redis?key=at:market:quote:NSE:RELIANCE",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "debug-redis"],
+              "query": [
+                { "key": "key", "value": "at:market:quote:NSE:RELIANCE", "description": "Any Redis key to inspect" }
+              ]
+            },
+            "description": "Returns the raw value of a Redis key. Useful for debugging live prices."
+          }
+        }
+
+      ]
+    }
+
+  ]
+}
