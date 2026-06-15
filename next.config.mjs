@@ -7,7 +7,8 @@ const nextConfig = {
     // Keep these heavy server-only packages out of the webpack client bundle.
     // pg and ioredis use node: protocol imports that webpack can't resolve for
     // browser/Edge targets. (Next.js 14 key; renamed to serverExternalPackages in v15)
-    serverComponentsExternalPackages: ['pg', 'pg-native', 'ioredis'],
+    // 'ws' must be external: its native bufferutil addon crashes when webpack bundles it
+    serverComponentsExternalPackages: ['pg', 'pg-native', 'ioredis', 'ws', 'bufferutil', 'utf-8-validate'],
     // Enable instrumentation.ts startup hook (stable in Next.js 14.1+)
     instrumentationHook: true,
   },

@@ -96,6 +96,7 @@ class LiveFeedManager {
   private buffer       = new Map<string, PriceTick>(); // token → latest tick
   private flushTimer:  ReturnType<typeof setInterval> | null = null;
   private pgTimer:     ReturnType<typeof setInterval> | null = null;
+  private flushing     = false;
   private reconnTimer: ReturnType<typeof setTimeout>  | null = null;
   private reconnDelay  = 3_000;
   private running      = false;
@@ -109,8 +110,12 @@ class LiveFeedManager {
     if (this.running) return;
     this.running = true;
     this.doConnect();
-    // Flush to Redis + Postgres every 3 s
-    this.flushTimer = setInterval(() => this.flush().catch(() => {}), 3_000);
+    // Flush to Redis + Postgres every 3 s — skip tick if previous flush still running
+    this.flushTimer = setInterval(() => {
+      if (this.flushing) return;
+      this.flushing = true;
+      this.flush().catch(() => {}).finally(() => { this.flushing = false; });
+    }, 3_000);
     console.log('[ws-live] Started — subscribing to', TOKEN_SYMBOL.size, 'instruments');
   }
 
@@ -286,22 +291,49 @@ class LiveFeedManager {
 declare global { var _wsLiveMgr: LiveFeedManager | null | undefined; }
 
 async function getWsCreds(): Promise<{ feedToken: string; clientCode: string; apiKey: string } | null> {
-  const apiKey = process.env.ANGELONE_API_KEY;
-  if (!apiKey || !process.env.ANGELONE_CLIENT_ID) return null;
+  const apiKey     = process.env.ANGELONE_API_KEY;
+  const clientId   = process.env.ANGELONE_CLIENT_ID;
+  const password   = process.env.ANGELONE_PASSWORD;
+  const totpSecret = process.env.ANGELONE_TOTP_SECRET;
+
+  if (!apiKey || !clientId) {
+    console.warn('[ws-live] ANGELONE_API_KEY or ANGELONE_CLIENT_ID missing from env — cannot start WS');
+    return null;
+  }
 
   try {
+    // Check cached session first
     const cached = await redis.get('at:market:session');
-    if (!cached) return null;
-    const sess = JSON.parse(cached) as {
-      accessToken: string; feedToken?: string; clientCode?: string; expiresAt: number;
-    };
-    if (!sess.feedToken || Date.now() >= sess.expiresAt) return null;
-    return {
-      feedToken:  sess.feedToken,
-      clientCode: sess.clientCode ?? process.env.ANGELONE_CLIENT_ID!,
-      apiKey,
-    };
-  } catch {
+    if (cached) {
+      const sess = JSON.parse(cached) as {
+        accessToken: string; feedToken?: string; clientCode?: string; expiresAt: number;
+      };
+      if (sess.feedToken && Date.now() < sess.expiresAt) {
+        return { feedToken: sess.feedToken, clientCode: sess.clientCode ?? clientId, apiKey };
+      }
+      console.log('[ws-live] Cached session expired or missing feedToken — re-logging in');
+    } else {
+      console.log('[ws-live] No cached session found — logging in to AngelOne');
+    }
+
+    // Auto-login using env vars (no manual trigger needed)
+    if (!password || !totpSecret) {
+      console.warn('[ws-live] ANGELONE_PASSWORD or ANGELONE_TOTP_SECRET missing — cannot auto-login');
+      return null;
+    }
+
+    const { getAngelSession } = await import('./auth');
+    const sess = await getAngelSession(apiKey, clientId, password, totpSecret);
+
+    if (!sess.feedToken) {
+      console.warn('[ws-live] AngelOne login succeeded but returned empty feedToken — WS cannot start');
+      return null;
+    }
+
+    console.log('[ws-live] Auto-login successful — feedToken acquired');
+    return { feedToken: sess.feedToken, clientCode: clientId, apiKey };
+  } catch (e) {
+    console.error('[ws-live] Failed to get credentials:', (e as Error).message);
     return null;
   }
 }
@@ -312,7 +344,10 @@ export function scheduleWsLive(): void {
     if (isMarketHours()) {
       if (!global._wsLiveMgr) {
         const creds = await getWsCreds();
-        if (!creds) return; // credentials not ready yet
+        if (!creds) {
+          console.warn('[ws-live] Still no credentials — will retry in 30 s');
+          return;
+        }
         global._wsLiveMgr = new LiveFeedManager(creds);
         global._wsLiveMgr.start();
       }
@@ -324,19 +359,22 @@ export function scheduleWsLive(): void {
     }
   }, 30_000);
 
-  // Try to start immediately if we're inside market hours
+  // Try to start immediately if we're inside market hours (no waiting for market-sync)
   setTimeout(async () => {
-    if (!isMarketHours()) return;
+    if (!isMarketHours()) {
+      console.log('[ws-live] Outside market hours — WS will auto-start at 09:00 IST');
+      return;
+    }
     const creds = await getWsCreds();
     if (!creds) {
-      console.log('[ws-live] No credentials yet — will retry on next 30s tick');
+      console.warn('[ws-live] Could not get credentials at startup — will retry every 30 s');
       return;
     }
     if (!global._wsLiveMgr) {
       global._wsLiveMgr = new LiveFeedManager(creds);
       global._wsLiveMgr.start();
     }
-  }, 20_000); // 20 s after startup (market-sync logs in first at 5 s)
+  }, 5_000); // try at 5 s — auto-login doesn't need market-sync to run first
 
   console.log('[ws-live] Scheduler started — will connect Mon–Fri 09:00–15:35 IST');
 }
