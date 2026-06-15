@@ -22,7 +22,7 @@ const TOKEN_LABELS: Record<string, string> = {
 };
 
 const NAV_LINKS = [
-  { id: 'markets',   label: 'Markets',   href: '/' },
+  { id: 'strategy',  label: 'Strategy',  href: '/strategy' },
   { id: 'watchlist', label: 'Watchlist', href: '/watchlist' },
   { id: 'portfolio', label: 'Portfolio', href: '/portfolio' },
   { id: 'orders',    label: 'Orders',    href: '/orders' },
@@ -94,7 +94,7 @@ export function Header() {
       <div className="flex items-center h-[52px] px-4 gap-3 max-w-[1600px] mx-auto">
 
         {/* Logo */}
-        <Link href="/" className="flex items-center gap-2 shrink-0" onClick={() => setActiveNav('dashboard')}>
+        <Link href="/strategy" className="flex items-center gap-2 shrink-0" onClick={() => setActiveNav('strategy')}>
           <div className="w-7 h-7 rounded-lg flex items-center justify-center glow-blue"
             style={{ background: 'linear-gradient(135deg,#2979ff,#00d4ff)' }}>
             <BarChart2 size={14} className="text-white" strokeWidth={2.5} />
