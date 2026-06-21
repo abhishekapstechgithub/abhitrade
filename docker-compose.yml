@@ -40,6 +40,8 @@ services:
       - ./scripts/migrate-bhavcopy-prices.sql:/docker-entrypoint-initdb.d/migrate-bhavcopy-prices.sql:ro
       - ./scripts/migrate-bhavcopy-widenpct.sql:/docker-entrypoint-initdb.d/migrate-bhavcopy-widenpct.sql:ro
       - ./scripts/migrate-index-prices.sql:/docker-entrypoint-initdb.d/migrate-index-prices.sql:ro
+      - ./scripts/migrate-angle-scrip.sql:/docker-entrypoint-initdb.d/migrate-angle-scrip.sql:ro
+      - ./scripts/migrate-angle-scrip-ltp.sql:/docker-entrypoint-initdb.d/migrate-angle-scrip-ltp.sql:ro
       - ./strategy-api/migrations/001_strategies.sql:/docker-entrypoint-initdb.d/migrate-001-strategies.sql:ro
       - ./strategy-api/migrations/002_paper_trading.sql:/docker-entrypoint-initdb.d/migrate-002-paper-trading.sql:ro
       - ./strategy-api/migrations/003_option_greeks_strategies.sql:/docker-entrypoint-initdb.d/migrate-003-option-greeks.sql:ro

@@ -85,7 +85,7 @@ async def scrip_sync_status() -> dict:
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT COUNT(*) AS total, MAX(updated_at) AS last_sync FROM angle_scrip"
+            "SELECT COUNT(*) AS total, MAX(loaded_at) AS last_sync FROM angle_scrip"
         )
     return {
         "total_instruments": row["total"] or 0,
