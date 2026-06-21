@@ -6,7 +6,7 @@ import { INDEX_TOKENS, EQUITY_TOKENS } from './angelone/tokens';
 import { getMarketQuote } from './angelone/client';
 
 const ANGEL_LOGIN_URL =
-  'https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword';
+  'https://apiconnect.angelone.in/rest/auth/angelbroking/user/v1/loginByPassword';
 
 export const SYNC_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
 const SESSION_TTL_S = 23 * 60 * 60;   // cache AngelOne JWT 23 h

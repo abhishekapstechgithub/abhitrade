@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createHmac } from 'crypto';
 
 const ANGEL_LOGIN_URL =
-  'https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword';
+  'https://apiconnect.angelone.in/rest/auth/angelbroking/user/v1/loginByPassword';
 
 // ── Pure-Node TOTP (RFC 6238) — no external dependency ────────────────────────
 function base32Decode(s: string): Buffer {
