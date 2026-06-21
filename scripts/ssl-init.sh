@@ -51,9 +51,9 @@ docker run --rm \
 # chain.pem needs to exist too (nginx ssl_trusted_certificate)
 cp "$CERT_DIR/fullchain.pem" "$CERT_DIR/chain.pem"
 
-# ── Step 2: Start nginx (with dummy cert so it can serve ACME challenge) ─────
-echo "[2/5] Starting nginx..."
-$DC -f "$COMPOSE_FILE" up -d nginx
+# ── Step 2: Start all services (build first so the prod image is fresh) ──────
+echo "[2/5] Building + starting services (this can take a few minutes)..."
+$DC -f "$COMPOSE_FILE" up -d --build
 echo "      Waiting 5s for nginx to be ready..."
 sleep 5
 
