@@ -237,7 +237,10 @@ services:
       - ./certbot/www:/var/www/certbot:ro
     command: ["/bin/sh", "/docker-entrypoint-custom.sh"]
     depends_on:
-      - app
+      app:
+        condition: service_healthy
+      strategy-api:
+        condition: service_healthy
     restart: unless-stopped
     stop_grace_period: 5s
     healthcheck:

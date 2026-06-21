@@ -21,6 +21,8 @@ for MIG in \
   /docker-entrypoint-initdb.d/migrate-market-movers.sql \
   /docker-entrypoint-initdb.d/migrate-market-movers-v2.sql \
   /docker-entrypoint-initdb.d/migrate-bhavcopy-prices.sql \
+  /docker-entrypoint-initdb.d/migrate-bhavcopy-widenpct.sql \
+  /docker-entrypoint-initdb.d/migrate-index-prices.sql \
   /docker-entrypoint-initdb.d/migrate-001-strategies.sql \
   /docker-entrypoint-initdb.d/migrate-002-paper-trading.sql \
   /docker-entrypoint-initdb.d/migrate-003-option-greeks.sql; do

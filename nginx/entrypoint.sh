@@ -31,13 +31,9 @@ server {
 ONLINEOF
   fi
 
-  # HTTP block: upstream + ACME challenge for both domains + redirect to HTTPS
+  # HTTP block: ACME challenge for both domains + redirect to HTTPS
+  # NOTE: upstream blocks live in nginx.conf — do NOT redeclare them here.
   cat > /etc/nginx/conf.d/http.conf << 'NGINXEOF'
-upstream tradekaro_app {
-    server app:3000;
-    keepalive 32;
-}
-
 server {
     listen 80;
     server_name abhitrade.com www.abhitrade.com;
