@@ -42,8 +42,10 @@ async def search_scrip(q: str = Query(..., min_length=1, max_length=50)) -> dict
             "token":          r["token"],
             "symbol":         r["symbol"],
             "name":           r["name"],
-            "exch_seg":       r["exch_seg"],
+            "exchange":       r["exch_seg"],   # mobile app reads 'exchange'
+            "exch_seg":       r["exch_seg"],   # kept for web compatibility
             "instrumenttype": r["instrumenttype"],
+            "instrument_type": r["instrumenttype"],  # snake_case alias
             "lotsize":        r["lotsize"],
             "strike":         float(r["strike"]) if r["strike"] else None,
             "expiry":         r["expiry"].isoformat() if r["expiry"] else None,
