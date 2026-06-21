@@ -1,11 +1,17 @@
 """Scrip search — Redis-first with Postgres fallback. 24 h TTL cache."""
 
-from fastapi import APIRouter, Query
+import asyncio
+import logging
+from fastapi import APIRouter, Query, BackgroundTasks
 
 from ...database import get_pool
 from ...services.market_data import (
     get_cached_scrip_search, cache_scrip_search, cache_scrip_detail,
 )
+from ...workers.scrip_sync import sync_scrip_master
+
+log = logging.getLogger(__name__)
+_sync_running = False
 
 router = APIRouter(prefix="/scrip", tags=["scrip"])
 
@@ -51,3 +57,38 @@ async def search_scrip(q: str = Query(..., min_length=1, max_length=50)) -> dict
         await cache_scrip_detail(r["token"], r)
 
     return {"results": results, "source": "db"}
+
+
+@router.post("/sync")
+async def trigger_scrip_sync(background_tasks: BackgroundTasks) -> dict:
+    """Manually trigger Angel One instrument master download + upsert into angle_scrip."""
+    global _sync_running
+    if _sync_running:
+        return {"status": "already_running", "message": "Sync already in progress — check back in a minute"}
+
+    async def _run():
+        global _sync_running
+        _sync_running = True
+        try:
+            count = await sync_scrip_master()
+            log.info("[scrip-sync] Manual sync complete — %d instruments upserted", count)
+        finally:
+            _sync_running = False
+
+    background_tasks.add_task(_run)
+    return {"status": "started", "message": "Downloading Angel One instrument master in background…"}
+
+
+@router.get("/sync/status")
+async def scrip_sync_status() -> dict:
+    """Returns the current count of instruments in angle_scrip and whether a sync is running."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT COUNT(*) AS total, MAX(updated_at) AS last_sync FROM angle_scrip"
+        )
+    return {
+        "total_instruments": row["total"] or 0,
+        "last_sync": row["last_sync"].isoformat() if row["last_sync"] else None,
+        "sync_running": _sync_running,
+    }

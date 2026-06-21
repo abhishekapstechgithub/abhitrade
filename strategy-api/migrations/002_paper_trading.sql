@@ -3,6 +3,7 @@
 -- Applied to: abhitrade_live
 -- All statements are idempotent (IF NOT EXISTS / ON CONFLICT DO NOTHING).
 -- =============================================================================
+\c abhitrade_live
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 

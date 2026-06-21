@@ -21,7 +21,9 @@ for MIG in \
   /docker-entrypoint-initdb.d/migrate-market-movers.sql \
   /docker-entrypoint-initdb.d/migrate-market-movers-v2.sql \
   /docker-entrypoint-initdb.d/migrate-bhavcopy-prices.sql \
-  /docker-entrypoint-initdb.d/migrate-001-strategies.sql; do
+  /docker-entrypoint-initdb.d/migrate-001-strategies.sql \
+  /docker-entrypoint-initdb.d/migrate-002-paper-trading.sql \
+  /docker-entrypoint-initdb.d/migrate-003-option-greeks.sql; do
   if [ -f "$MIG" ]; then
     echo "[init-databases]   → $(basename $MIG)"
     psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d abhitrade_live -f "$MIG"

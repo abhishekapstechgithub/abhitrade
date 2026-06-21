@@ -3,6 +3,7 @@
 -- Applied to: abhitrade_live
 -- All statements are idempotent (IF NOT EXISTS / ADD COLUMN IF NOT EXISTS).
 -- =============================================================================
+\c abhitrade_live
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 

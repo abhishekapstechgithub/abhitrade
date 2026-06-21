@@ -3,6 +3,7 @@
 -- Applied to: abhitrade_live
 -- All statements are idempotent (IF NOT EXISTS).
 -- =============================================================================
+\c abhitrade_live
 
 -- Enable UUID extension (already present in schema.sql but safe to repeat)
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
