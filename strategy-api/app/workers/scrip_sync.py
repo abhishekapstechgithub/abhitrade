@@ -103,10 +103,21 @@ _UPSERT_SQL = """
 """
 
 
+def _parse_all_rows(buf: io.BytesIO) -> list[tuple]:
+    """Synchronous: parse every record from the BytesIO buffer using ijson.
+    Runs in a thread executor so it doesn't block the event loop."""
+    rows: list[tuple] = []
+    for r in ijson.items(buf, "item"):
+        row = _parse_row(r)
+        if row:
+            rows.append(row)
+    return rows
+
+
 async def _do_sync() -> int:
     log.info("[scrip-sync] Downloading AngelOne instrument master…")
 
-    # Stream response into a BytesIO buffer — avoids holding both raw bytes
+    # Stream response into a BytesIO buffer so we don't hold both raw bytes
     # and parsed Python dicts in memory at the same time.
     buf = io.BytesIO()
     try:
@@ -120,36 +131,34 @@ async def _do_sync() -> int:
         log.error("[scrip-sync] Download failed: %s", e)
         return 0
 
+    size_mb = buf.tell() / 1_048_576
     buf.seek(0)
-    log.info("[scrip-sync] Downloaded %.1f MB — stream-parsing…", buf.tell() / 1_048_576)
+    log.info("[scrip-sync] Downloaded %.1f MB — parsing in background thread…", size_mb)
+
+    # Run synchronous ijson parsing in a thread so the event loop stays free
+    loop = asyncio.get_event_loop()
+    try:
+        rows = await loop.run_in_executor(None, _parse_all_rows, buf)
+    except Exception as e:
+        log.error("[scrip-sync] Parse error: %s", e)
+        return 0
+
+    buf.close()
+    log.info("[scrip-sync] Parsed %d instruments — upserting…", len(rows))
 
     pool  = get_pool()
     count = 0
-    batch: list[tuple] = []
     BATCH_SIZE = 500
 
-    # ijson parses the JSON array item-by-item — never holds the full list in memory
-    try:
-        for r in ijson.items(buf, "item"):
-            row = _parse_row(r)
-            if row:
-                batch.append(row)
-
-            if len(batch) >= BATCH_SIZE:
-                async with pool.acquire() as conn:
-                    await conn.executemany(_UPSERT_SQL, batch)
-                count += len(batch)
-                batch = []
-                await asyncio.sleep(0)  # yield event loop between batches
-    except Exception as e:
-        log.error("[scrip-sync] Parse/upsert error: %s", e)
-        return count
-
-    # Flush remaining rows
-    if batch:
-        async with pool.acquire() as conn:
-            await conn.executemany(_UPSERT_SQL, batch)
-        count += len(batch)
+    for i in range(0, len(rows), BATCH_SIZE):
+        batch = rows[i : i + BATCH_SIZE]
+        try:
+            async with pool.acquire() as conn:
+                await conn.executemany(_UPSERT_SQL, batch)
+            count += len(batch)
+        except Exception as e:
+            log.error("[scrip-sync] Upsert error at batch %d: %s", i // BATCH_SIZE, e)
+        await asyncio.sleep(0)  # yield event loop between batches
 
     log.info("[scrip-sync] Upserted %d instruments", count)
     return count
