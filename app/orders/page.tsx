@@ -6,7 +6,7 @@ import { formatNumber } from '@/lib/utils/format';
 
 const API_BASE = process.env.NEXT_PUBLIC_STRATEGY_API_URL ?? '';
 
-function authHeaders() {
+function authHeaders(): Record<string, string> {
   if (typeof window === 'undefined') return {};
   const t = sessionStorage.getItem('tk_access_token') ?? localStorage.getItem('tk_access_token');
   return t ? { Authorization: `Bearer ${t}` } : {};
