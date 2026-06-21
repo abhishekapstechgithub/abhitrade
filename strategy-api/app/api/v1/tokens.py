@@ -13,9 +13,10 @@ This registry is an additional signals layer for the paper trading backend to
 prioritise which tokens the limit-order engine should resolve LTPs for.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
+from ...database import get_pool
 from ...redis_client import get_redis
 from ...dependencies import CurrentUser
 
@@ -107,3 +108,55 @@ async def get_active_tokens(user_id: CurrentUser) -> dict:
         "active_tokens": active,
         "total":         len(active),
     }
+
+
+@router.get("/ltp")
+async def get_token_ltps(tokens: str = Query(..., description="Comma-separated token list")) -> dict:
+    """
+    GET /api/tokens/ltp?tokens=TOKEN1,TOKEN2,...
+    Returns LTP for each token from Redis live feed or angle_scrip EOD fallback.
+    No auth required — public price data.
+    """
+    token_list = [t.strip() for t in tokens.split(",") if t.strip()]
+    if not token_list:
+        return {"prices": {}}
+
+    r       = get_redis()
+    prices  = {}
+    missing = []
+
+    # Try Redis live LTP first (at:market:ltp:token:{token} set by ws-live.ts)
+    for token in token_list:
+        try:
+            live = await r.get(f"at:market:ltp:token:{token}")
+            if live:
+                prices[token] = {"token": token, "ltp": float(live), "change_pct": None, "source": "live"}
+            else:
+                missing.append(token)
+        except Exception:
+            missing.append(token)
+
+    # Fallback to angle_scrip EOD prices for tokens not in Redis
+    if missing:
+        try:
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """SELECT token, ltp, close, prev_close, change_pct
+                       FROM angle_scrip
+                       WHERE token = ANY($1::text[]) AND ltp IS NOT NULL""",
+                    missing,
+                )
+            for row in rows:
+                prices[row["token"]] = {
+                    "token":      row["token"],
+                    "ltp":        float(row["ltp"] or 0),
+                    "close":      float(row["close"] or 0)      if row["close"]      else None,
+                    "prev_close": float(row["prev_close"] or 0) if row["prev_close"] else None,
+                    "change_pct": float(row["change_pct"] or 0) if row["change_pct"] else None,
+                    "source":     "eod",
+                }
+        except Exception as e:
+            log.warning("[tokens/ltp] DB fallback error: %s", e)
+
+    return {"prices": prices}

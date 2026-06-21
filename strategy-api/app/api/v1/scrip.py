@@ -15,18 +15,37 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/scrip", tags=["scrip"])
 
 
+async def _enrich_with_live_ltp(results: list[dict]) -> list[dict]:
+    """Overlay Redis live LTP on top of DB (EOD) prices. Non-blocking on miss."""
+    r = get_redis()
+    for item in results:
+        token = item.get("token") or ""
+        if not token:
+            continue
+        try:
+            live = await r.get(f"at:market:ltp:token:{token}")
+            if live:
+                item["ltp"] = float(live)
+        except Exception:
+            pass
+    return results
+
+
 @router.get("/search")
 async def search_scrip(q: str = Query(..., min_length=1, max_length=50)) -> dict:
     query = q.strip().upper()
 
     cached = await get_cached_scrip_search(query)
     if cached is not None:
-        return {"results": cached, "source": "cache"}
+        # Enrich cached (EOD) results with live Redis prices before returning
+        enriched = await _enrich_with_live_ltp([dict(r) for r in cached])
+        return {"results": enriched, "source": "cache"}
 
     pool = get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            """SELECT token, symbol, name, exch_seg, instrumenttype, lotsize, strike, expiry
+            """SELECT token, symbol, name, exch_seg, instrumenttype, lotsize, strike, expiry,
+                      ltp, open, high, low, close, prev_close, change_pct, ltp_updated_at
                FROM angle_scrip
                WHERE symbol ILIKE $1 OR name ILIKE $1
                ORDER BY
@@ -39,23 +58,36 @@ async def search_scrip(q: str = Query(..., min_length=1, max_length=50)) -> dict
 
     results = [
         {
-            "token":          r["token"],
-            "symbol":         r["symbol"],
-            "name":           r["name"],
-            "exchange":       r["exch_seg"],   # mobile app reads 'exchange'
-            "exch_seg":       r["exch_seg"],   # kept for web compatibility
-            "instrumenttype": r["instrumenttype"],
+            "token":           r["token"],
+            "symbol":          r["symbol"],
+            "name":            r["name"],
+            "exchange":        r["exch_seg"],        # mobile reads 'exchange'
+            "exch_seg":        r["exch_seg"],        # web compatibility
+            "instrumenttype":  r["instrumenttype"],
             "instrument_type": r["instrumenttype"],  # snake_case alias
-            "lotsize":        r["lotsize"],
-            "strike":         float(r["strike"]) if r["strike"] else None,
-            "expiry":         r["expiry"].isoformat() if r["expiry"] else None,
+            "lotsize":         r["lotsize"],
+            "strike":          float(r["strike"])         if r["strike"]      else None,
+            "expiry":          r["expiry"].isoformat()    if r["expiry"]      else None,
+            # EOD price data from bhavcopy (None until first upload)
+            "ltp":             float(r["ltp"])            if r["ltp"]         else None,
+            "open":            float(r["open"])           if r["open"]        else None,
+            "high":            float(r["high"])           if r["high"]        else None,
+            "low":             float(r["low"])            if r["low"]         else None,
+            "close":           float(r["close"])          if r["close"]       else None,
+            "prev_close":      float(r["prev_close"])     if r["prev_close"]  else None,
+            "change_pct":      float(r["change_pct"])     if r["change_pct"]  else None,
+            "ltp_updated_at":  r["ltp_updated_at"].isoformat() if r["ltp_updated_at"] else None,
         }
         for r in rows
     ]
 
+    # Cache DB (EOD) results before live enrichment
     await cache_scrip_search(query, results)
     for r in results:
         await cache_scrip_detail(r["token"], r)
+
+    # Overlay live Redis LTP (not cached — always fresh)
+    results = await _enrich_with_live_ltp(results)
 
     return {"results": results, "source": "db"}
 
