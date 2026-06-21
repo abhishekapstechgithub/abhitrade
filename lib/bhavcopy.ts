@@ -22,7 +22,7 @@ export interface BhavcopyStats {
   results:      BhavcopyResult[];
 }
 
-// ── Schema migration ───────────────────────────────────────────────────────────
+// ── Schema migrations ──────────────────────────────────────────────────────────
 
 let _migrationDone = false;
 async function ensureColumns(): Promise<void> {
@@ -44,10 +44,20 @@ async function ensureColumns(): Promise<void> {
       ADD COLUMN IF NOT EXISTS price_updated_at TIMESTAMPTZ
   `);
   // Widen change_pct if an older deployment created it as DECIMAL(8,4).
-  // Options can have 10000%+ changes (e.g. ₹0.05 → ₹5.05), which overflows DECIMAL(8,4).
   await pool.query(`
     ALTER TABLE security_master ALTER COLUMN change_pct TYPE DECIMAL(12,4)
   `).catch(() => {});
+
+  // angle_scrip EOD columns (populated by Bhavcopy upload)
+  await pool.query(`
+    ALTER TABLE angle_scrip
+      ADD COLUMN IF NOT EXISTS prev_close    NUMERIC(18,4),
+      ADD COLUMN IF NOT EXISTS change_pct   NUMERIC(12,4),
+      ADD COLUMN IF NOT EXISTS volume        BIGINT,
+      ADD COLUMN IF NOT EXISTS open_interest BIGINT,
+      ADD COLUMN IF NOT EXISTS price_date    DATE
+  `).catch(() => {});
+
   _migrationDone = true;
 }
 
@@ -85,6 +95,68 @@ function parseDate(v: string | undefined): string | null {
 function isNewFormat(headers: string[]): boolean {
   return headers.some(h => h.trim() === 'FinInstrmId');
 }
+
+// ── angle_scrip EOD update — token-keyed, single UNNEST round-trip ────────────
+
+const ANGLE_SCRIP_BY_TOKEN_SQL = `
+UPDATE angle_scrip AS a SET
+  ltp            = NULLIF(d.ltp,  '')::NUMERIC,
+  open           = NULLIF(d.open, '')::NUMERIC,
+  high           = NULLIF(d.high, '')::NUMERIC,
+  low            = NULLIF(d.low,  '')::NUMERIC,
+  close          = NULLIF(d.close,'')::NUMERIC,
+  prev_close     = NULLIF(d.prev, '')::NUMERIC,
+  change_pct     = NULLIF(d.pct,  '')::NUMERIC,
+  volume         = NULLIF(d.vol,  '')::BIGINT,
+  open_interest  = NULLIF(d.oi,   '')::BIGINT,
+  price_date     = NULLIF(d.dt,   '')::DATE,
+  ltp_updated_at = NOW()
+FROM (
+  SELECT
+    UNNEST($1::TEXT[])  AS token,
+    UNNEST($2::TEXT[])  AS ltp,
+    UNNEST($3::TEXT[])  AS open,
+    UNNEST($4::TEXT[])  AS high,
+    UNNEST($5::TEXT[])  AS low,
+    UNNEST($6::TEXT[])  AS close,
+    UNNEST($7::TEXT[])  AS prev,
+    UNNEST($8::TEXT[])  AS pct,
+    UNNEST($9::TEXT[])  AS vol,
+    UNNEST($10::TEXT[]) AS oi,
+    UNNEST($11::TEXT[]) AS dt
+) AS d
+WHERE a.token = d.token
+`;
+
+// Old format: update by symbol, limited to EQ instruments on NSE/BSE
+const ANGLE_SCRIP_BY_SYMBOL_SQL = `
+UPDATE angle_scrip AS a SET
+  ltp            = NULLIF(d.ltp,  '')::NUMERIC,
+  open           = NULLIF(d.open, '')::NUMERIC,
+  high           = NULLIF(d.high, '')::NUMERIC,
+  low            = NULLIF(d.low,  '')::NUMERIC,
+  close          = NULLIF(d.close,'')::NUMERIC,
+  prev_close     = NULLIF(d.prev, '')::NUMERIC,
+  change_pct     = NULLIF(d.pct,  '')::NUMERIC,
+  volume         = NULLIF(d.vol,  '')::BIGINT,
+  open_interest  = NULL,
+  price_date     = NULLIF(d.dt,   '')::DATE,
+  ltp_updated_at = NOW()
+FROM (
+  SELECT
+    UNNEST($1::TEXT[])  AS symbol,
+    UNNEST($2::TEXT[])  AS ltp,
+    UNNEST($3::TEXT[])  AS open,
+    UNNEST($4::TEXT[])  AS high,
+    UNNEST($5::TEXT[])  AS low,
+    UNNEST($6::TEXT[])  AS close,
+    UNNEST($7::TEXT[])  AS prev,
+    UNNEST($8::TEXT[])  AS pct,
+    UNNEST($9::TEXT[])  AS vol,
+    UNNEST($10::TEXT[]) AS dt
+) AS d
+WHERE a.symbol = d.symbol AND a.exch_seg IN ('NSE','BSE') AND a.instrumenttype = 'EQ'
+`;
 
 // ── Batch SQL ─────────────────────────────────────────────────────────────────
 
@@ -273,6 +345,11 @@ async function processFile(filePath: string): Promise<BhavcopyResult> {
       } catch (e) {
         result.errors.push((e as Error).message);
       }
+
+      // Also update angle_scrip (ltp, open, high, low, close + new EOD columns)
+      pool.query(ANGLE_SCRIP_BY_TOKEN_SQL, [
+        tokens, ltps, opens, highs, lows, closes, prevs, pcts, vols, ois, dts,
+      ]).catch(() => {});
     }
 
   } else {
@@ -325,6 +402,11 @@ async function processFile(filePath: string): Promise<BhavcopyResult> {
       } catch (e) {
         result.errors.push((e as Error).message);
       }
+
+      // Also update angle_scrip EOD prices keyed by symbol (EQ only)
+      pool.query(ANGLE_SCRIP_BY_SYMBOL_SQL, [
+        symbols, ltps, opens, highs, lows, closes, prevs, pcts, vols, dts,
+      ]).catch(() => {});
     }
   }
 

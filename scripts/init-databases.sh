@@ -25,6 +25,7 @@ for MIG in \
   /docker-entrypoint-initdb.d/migrate-index-prices.sql \
   /docker-entrypoint-initdb.d/migrate-angle-scrip.sql \
   /docker-entrypoint-initdb.d/migrate-angle-scrip-ltp.sql \
+  /docker-entrypoint-initdb.d/migrate-angle-scrip-bhavcopy.sql \
   /docker-entrypoint-initdb.d/migrate-001-strategies.sql \
   /docker-entrypoint-initdb.d/migrate-002-paper-trading.sql \
   /docker-entrypoint-initdb.d/migrate-003-option-greeks.sql; do
