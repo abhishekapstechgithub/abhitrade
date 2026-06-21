@@ -50,8 +50,27 @@ async def ws_stream(websocket: WebSocket) -> None:
             if subscribed and tick.get("token") not in subscribed:
                 continue
 
+            # Normalize tick for Flutter clients:
+            #   ws-live.ts publishes {ltp, open, high, low, close, volume}
+            #   Flutter _onTick filters on mode=='full' and reads last_price/open_price/etc.
+            ltp   = tick.get("ltp", 0) or 0
+            close = tick.get("close", 0) or 0
+            net   = round(ltp - close, 2)
+            pct   = round((net / close * 100), 4) if close else 0
+            normalized = {
+                **tick,
+                "mode":           "full",
+                "last_price":     ltp,
+                "open_price":     tick.get("open", 0),
+                "high_price":     tick.get("high", 0),
+                "low_price":      tick.get("low", 0),
+                "close_price":    close,
+                "net_change":     net,
+                "percent_change": pct,
+            }
+
             try:
-                await websocket.send_json(tick)
+                await websocket.send_json(normalized)
             except Exception:
                 break
     except WebSocketDisconnect:
