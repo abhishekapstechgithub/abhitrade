@@ -40,6 +40,9 @@ services:
       - ./scripts/migrate-bhavcopy-prices.sql:/docker-entrypoint-initdb.d/migrate-bhavcopy-prices.sql:ro
       - ./scripts/migrate-bhavcopy-widenpct.sql:/docker-entrypoint-initdb.d/migrate-bhavcopy-widenpct.sql:ro
       - ./scripts/migrate-index-prices.sql:/docker-entrypoint-initdb.d/migrate-index-prices.sql:ro
+      - ./strategy-api/migrations/001_strategies.sql:/docker-entrypoint-initdb.d/migrate-001-strategies.sql:ro
+      - ./strategy-api/migrations/002_paper_trading.sql:/docker-entrypoint-initdb.d/migrate-002-paper-trading.sql:ro
+      - ./strategy-api/migrations/003_option_greeks_strategies.sql:/docker-entrypoint-initdb.d/migrate-003-option-greeks.sql:ro
     restart: unless-stopped
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-tradekaro} -d abhitrade_live']
@@ -100,7 +103,6 @@ services:
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_DB_LIVE=abhitrade_live
-      - POSTGRES_DB_PAPER=abhitrade_papertrade
       - POSTGRES_USER=${POSTGRES_USER:-tradekaro}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-tradekaro}
     depends_on:
@@ -113,6 +115,52 @@ services:
       - tools
     networks:
       - app-net
+
+  # ── Strategy API (FastAPI / Python) ──────────────────────────────────────
+  # Handles /api/strategies/* and /api/backtests/* — routed here by nginx.
+  # Port 8000 is NOT exposed to the host; access is through nginx only.
+  strategy-api:
+    build:
+      context: ./strategy-api
+      dockerfile: Dockerfile
+    container_name: abhitrade-strategy-api
+    expose:
+      - '8000'
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-tradekaro}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-tradekaro}
+      - POSTGRES_DB=abhitrade_live
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - JWT_ALGORITHM=HS256
+      - AUTH_ENABLED=${AUTH_ENABLED:-true}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,https://abhitrade.com}
+      - LOG_LEVEL=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 5s
+    healthcheck:
+      test: ['CMD-SHELL', 'python -c "import urllib.request; urllib.request.urlopen(\"http://localhost:8000/health\")" || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - proxy-net
+      - app-net
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: '0.5'
 
   # ── Next.js App — internal only, fronted by Nginx ─────────────────────────
   # Port 3000 is NOT exposed to the host. All traffic comes through nginx.
@@ -136,7 +184,6 @@ services:
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_DB_LIVE=abhitrade_live
-      - POSTGRES_DB_PAPER=abhitrade_papertrade
       - POSTGRES_USER=${POSTGRES_USER:-tradekaro}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-tradekaro}
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-https://abhitrade.com/api}

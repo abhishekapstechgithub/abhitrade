@@ -8,10 +8,10 @@ import {
   MoreVertical, Maximize2, Minus,
   ArrowDownToLine, LayoutGrid, Table as TableIcon,
   Filter, Columns, ChevronsUpDown,
-  Sun, Moon, Zap, ExternalLink,
+  Zap, ExternalLink,
 } from 'lucide-react';
-import { useUIStore } from '@/store/useUIStore';
 import { useTheme } from '@/components/theme/ThemeProvider';
+import { useUIStore } from '@/store/useUIStore';
 import { formatNumber, formatPercent, formatVolume } from '@/lib/utils/format';
 import type { WatchlistItem, OptionContract } from '@/types';
 import { useAngelOnePrices } from '@/hooks/useAngelOneWs';
@@ -1272,9 +1272,8 @@ function ChartMode({ items, activeWL, setActiveWL, onAdd, onRemove, onSwitchToTa
   const [activeTab, setActiveTab]         = useState<CenterTab>('chart');
 
   // Sync chart theme with global app theme automatically
-  const { theme: globalTheme, setTheme } = useTheme();
+  const { theme: globalTheme } = useTheme();
   const chartTheme = (globalTheme === 'dark' || (globalTheme === 'system' && typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches)) ? 'dark' : 'light';
-  const isDark = chartTheme === 'dark';
 
   const CENTER_TABS: Array<{ key: CenterTab; label: string }> = [
     { key: 'chart',       label: 'Chart'             },
@@ -1299,20 +1298,6 @@ function ChartMode({ items, activeWL, setActiveWL, onAdd, onRemove, onSwitchToTa
         {/* Tab bar — spans chart width only */}
         <div className="flex items-center shrink-0"
           style={{ height: 40, borderBottom: '1px solid var(--panel-divider)', background: 'var(--panel-bg)', paddingLeft: 8, paddingRight: 8 }}>
-
-          {/* Theme toggle — far left before tabs */}
-          <button
-            title={isDark ? 'Switch to Light' : 'Switch to Dark'}
-            onClick={() => setTheme(isDark ? 'light' : 'dark')}
-            className="flex items-center justify-center rounded-lg mr-2 shrink-0 transition-all hover:scale-105"
-            style={{
-              width: 28, height: 28,
-              background: isDark ? 'rgba(251,191,36,0.12)' : 'rgba(99,102,241,0.1)',
-              color: isDark ? '#fbbf24' : '#6366f1',
-              border: isDark ? '1px solid rgba(251,191,36,0.3)' : '1px solid rgba(99,102,241,0.25)',
-            }}>
-            {isDark ? <Sun size={13} /> : <Moon size={13} />}
-          </button>
 
           {/* Tabs */}
           {CENTER_TABS.map(t => (

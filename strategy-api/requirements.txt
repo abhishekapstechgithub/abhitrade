@@ -1,0 +1,12 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+asyncpg==0.30.0
+pydantic==2.10.3
+pydantic-settings==2.6.1
+python-jose[cryptography]==3.3.0
+python-multipart==0.0.20
+httpx==0.28.1
+orjson==3.10.12
+redis[hiredis]==5.2.1
+aiohttp==3.11.11
+pytz==2024.2

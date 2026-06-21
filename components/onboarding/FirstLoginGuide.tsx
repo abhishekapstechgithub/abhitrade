@@ -29,8 +29,8 @@ const STEPS: Step[] = [
   },
   {
     icon: <TrendingUp size={28} />,
-    title: 'Option Chain & Charts',
-    desc: 'Open the Markets menu to access the live Option Chain, advanced TradingView-style charts, and strategy tools.',
+    title: 'Strategy & Option Chain',
+    desc: 'Open the Strategy tab to build, backtest, and deploy options strategies. Use the dashboard to access the live Option Chain and charts.',
     tip: 'Option chain updates live every second via AngelOne WebSocket',
     color: '#00c853',
     bg: 'rgba(0,200,83,0.08)',
@@ -46,8 +46,8 @@ const STEPS: Step[] = [
   {
     icon: <PieChart size={28} />,
     title: 'Portfolio & Positions',
-    desc: 'Track holdings, grouped positions, P&L and margin usage. Paper trading mode lets you practice without real money.',
-    tip: 'Switch LIVE ↔ PAPER using the toggle in the top-right header',
+    desc: 'Track holdings, grouped positions, P&L and margin usage. Connect AngelOne to see live data.',
+    tip: 'Connect AngelOne in the Profile page to enable live portfolio and positions',
     color: '#aa00ff',
     bg: 'rgba(170,0,255,0.08)',
   },

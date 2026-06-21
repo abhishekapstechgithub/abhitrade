@@ -1,17 +1,17 @@
 'use client';
 import {
-  Bell, ChevronDown, Search, BarChart2, FlaskConical, Zap,
+  Bell, ChevronDown, Search, BarChart2, Zap,
   PieChart, Star, ChevronRight, Sun, Moon, Monitor,
 } from 'lucide-react';
 import { useMarketStore } from '@/store/useMarketStore';
 import { useUIStore } from '@/store/useUIStore';
-import { usePaperTradingStore } from '@/store/usePaperTradingStore';
 import { useAngelOneStore } from '@/store/useAngelOneStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useAngelOneQuotes } from '@/hooks/useAngelOneData';
 import { formatNumber, formatPercent, cn } from '@/lib/utils/format';
 import Link from 'next/link';
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { usePathname } from 'next/navigation';
 import { useTheme } from '@/components/theme/ThemeProvider';
 import { MarketIndex } from '@/types';
 const INDEX_EXCHANGE_TOKENS = { NSE: ['99926000', '99926009'], BSE: ['99919000'] };
@@ -34,7 +34,7 @@ const NAV_LINKS = [
 const CHIP_ACTIONS = [
   { label: 'Option Chain',         href: '/?tab=option-chain', Icon: BarChart2 },
   { label: 'Stock Composition',    href: '/?tab=composition',  Icon: PieChart  },
-  { label: 'Favourite Strategies', href: '/?tab=strategies',   Icon: Star      },
+  { label: 'My Strategies',        href: '/strategy',          Icon: Star      },
 ];
 
 // ── useOutsideClick ────────────────────────────────────────────────────────────
@@ -50,14 +50,13 @@ function useOutsideClick(ref: React.RefObject<HTMLElement | null>, cb: () => voi
 
 export function Header() {
   const { indices } = useMarketStore();
-  const { setSearchOpen, notificationsOpen, setNotificationsOpen, activeNav, setActiveNav,
-          pinnedIndices, togglePinnedIndex, tradingMode, setTradingMode } = useUIStore();
-  const { active: paperActive, toggle: paperToggle } = usePaperTradingStore();
-
-  const handleModeToggle = () => {
-    paperToggle();
-    setTradingMode(paperActive ? 'live' : 'paper');
-  };
+  const { setSearchOpen, notificationsOpen, setNotificationsOpen, setActiveNav,
+          pinnedIndices, togglePinnedIndex } = useUIStore();
+  const pathname = usePathname();
+  // Derive active nav from current path so direct URL navigation always highlights correctly
+  const activeNav = NAV_LINKS.find(
+    link => pathname === link.href || pathname.startsWith(link.href + '/')
+  )?.id ?? '';
   const { isConnected, mode } = useAngelOneStore();
   const isLive = isConnected && mode === 'live';
   const getInitials  = useAuthStore(s => s.getInitials);
@@ -94,7 +93,7 @@ export function Header() {
       <div className="flex items-center h-[52px] px-4 gap-3 max-w-[1600px] mx-auto">
 
         {/* Logo */}
-        <Link href="/strategy" className="flex items-center gap-2 shrink-0" onClick={() => setActiveNav('strategy')}>
+        <Link href="/" className="flex items-center gap-2 shrink-0" onClick={() => setActiveNav('')}>
           <div className="w-7 h-7 rounded-lg flex items-center justify-center glow-blue"
             style={{ background: 'linear-gradient(135deg,#2979ff,#00d4ff)' }}>
             <BarChart2 size={14} className="text-white" strokeWidth={2.5} />
@@ -102,16 +101,6 @@ export function Header() {
           <span className="text-base font-bold tracking-tight grad-blue">AbhiTrade</span>
         </Link>
 
-        {/* LIVE badge */}
-        <div className="hidden md:flex items-center gap-1 px-2 py-0.5 rounded-full text-xs shrink-0"
-          style={isLive
-            ? { background:'rgba(var(--gain-rgb),0.15)', border:'1px solid rgba(var(--gain-rgb),0.4)' }
-            : { background:'rgba(var(--gain-rgb),0.08)', border:'1px solid rgba(var(--gain-rgb),0.2)' }}>
-          {isLive
-            ? <><Zap size={9} style={{ color:'var(--accent-green)' }} /><span className="font-bold" style={{ color:'var(--accent-green)', fontSize:'10px' }}>LIVE</span></>
-            : <><span className="w-1.5 h-1.5 rounded-full live-dot" style={{ background:'var(--accent-green)' }} /><span className="font-semibold" style={{ color:'var(--accent-green)', fontSize:'10px' }}>LIVE</span></>
-          }
-        </div>
 
         {/* Index chips + dropdown trigger */}
         <div className="hidden md:flex items-center gap-1 relative" ref={indicesListRef}>
@@ -124,6 +113,9 @@ export function Header() {
             const ltp = hasReal ? liveEntry![1].ltp : (idx.ltp > 0 ? idx.ltp : null);
             const chg = hasReal ? liveEntry![1].change : (idx.ltp > 0 ? idx.change : null);
             const pct = hasReal ? liveEntry![1].pct   : (idx.ltp > 0 ? idx.changePercent : null);
+            // high/low always from store (updated via WebSocket ticks + setIndexData)
+            const high = idx.high > 0 ? idx.high : null;
+            const low  = idx.low  > 0 ? idx.low  : null;
             return (
               <IndexChip
                 key={idx.symbol}
@@ -131,6 +123,8 @@ export function Header() {
                 ltp={ltp}
                 change={chg}
                 changePercent={pct}
+                high={high}
+                low={low}
                 isLive={hasReal}
               />
             );
@@ -287,23 +281,6 @@ export function Header() {
             <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full live-dot" style={{ background:'var(--accent-red)' }} />
           </button>
 
-          {/* LIVE / PAPER toggle pill */}
-          <button
-            onClick={handleModeToggle}
-            className="flex items-center rounded-lg overflow-hidden transition-all"
-            style={{ border: '1px solid', borderColor: paperActive ? 'rgba(245,158,11,0.5)' : 'rgba(22,163,74,0.5)', fontSize: '10px', fontWeight: 700 }}
-            title={paperActive ? 'Switch to Live trading' : 'Switch to Paper trading'}
-          >
-            <span className="flex items-center gap-1 px-2 py-1 transition-colors"
-              style={{ background: !paperActive ? 'rgba(22,163,74,0.18)' : 'transparent', color: !paperActive ? '#16a34a' : 'var(--text-dim)' }}>
-              <Zap size={10} /> LIVE
-            </span>
-            <span className="flex items-center gap-1 px-2 py-1 transition-colors"
-              style={{ background: paperActive ? 'rgba(245,158,11,0.18)' : 'transparent', color: paperActive ? 'rgb(245,158,11)' : 'var(--text-dim)' }}>
-              <FlaskConical size={10} /> PAPER
-            </span>
-          </button>
-
           <Link href="/profile" onClick={() => setActiveNav('profile')}
             className="flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-md transition-colors hover:bg-white/5">
             <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white"
@@ -338,8 +315,9 @@ const POPUP_STYLE: React.CSSProperties = {
 };
 
 // ── Index chip with hover quick-action menu ────────────────────────────────────
-function IndexChip({ symbol, ltp, change, changePercent, isLive: live }: {
-  symbol: string; ltp: number | null; change: number | null; changePercent: number | null; isLive: boolean;
+function IndexChip({ symbol, ltp, change, changePercent, high, low, isLive: live }: {
+  symbol: string; ltp: number | null; change: number | null; changePercent: number | null;
+  high: number | null; low: number | null; isLive: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -392,6 +370,24 @@ function IndexChip({ symbol, ltp, change, changePercent, isLive: live }: {
             </span>
           )}
         </div>
+        {/* Row 3 — H / L (shown only when data available) */}
+        {(high !== null || low !== null) && (
+          <div className="flex items-center gap-1.5 mt-0.5">
+            {high !== null && (
+              <span className="text-[9px] font-mono leading-none" style={{ color: 'var(--accent-green)' }}>
+                H {formatNumber(high)}
+              </span>
+            )}
+            {high !== null && low !== null && (
+              <span className="text-[9px] leading-none" style={{ color: 'var(--text-label)' }}>·</span>
+            )}
+            {low !== null && (
+              <span className="text-[9px] font-mono leading-none" style={{ color: 'var(--accent-red)' }}>
+                L {formatNumber(low)}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── hover quick-action dropdown ───────────────────────────────── */}

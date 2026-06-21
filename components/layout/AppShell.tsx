@@ -2,7 +2,6 @@
 
 import { usePathname } from 'next/navigation';
 import { Header } from './Header';
-import { PaperTradingBanner } from '@/components/paper-trading/PaperTradingBanner';
 import { GlobalSearch } from '@/components/search/GlobalSearch';
 import { OrderPanel } from '@/components/orders/OrderPanel';
 
@@ -20,7 +19,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <>
       <Header />
-      <PaperTradingBanner />
       <main className="min-h-[calc(100vh-3.5rem)]">
         {children}
       </main>

@@ -1,12 +1,8 @@
 import { Pool, PoolClient, QueryResultRow } from 'pg';
 
-export type TradingMode = 'live' | 'paper';
-
 declare global {
   // eslint-disable-next-line no-var
-  var _pgLivePool:  Pool | undefined;
-  // eslint-disable-next-line no-var
-  var _pgPaperPool: Pool | undefined;
+  var _pgLivePool: Pool | undefined;
 }
 
 function createPool(database: string): Pool {
@@ -23,30 +19,27 @@ function createPool(database: string): Pool {
   });
 }
 
-const LIVE_DB  = process.env.POSTGRES_DB_LIVE  ?? 'abhitrade_live';
-const PAPER_DB = process.env.POSTGRES_DB_PAPER ?? 'abhitrade_papertrade';
+const LIVE_DB = process.env.POSTGRES_DB_LIVE ?? 'abhitrade_live';
 
-// Singletons — survive Next.js hot-reloads in dev
-export const livePool:  Pool = global._pgLivePool  ?? (global._pgLivePool  = createPool(LIVE_DB));
-export const paperPool: Pool = global._pgPaperPool ?? (global._pgPaperPool = createPool(PAPER_DB));
+// Singleton — survives Next.js hot-reloads in dev
+export const livePool: Pool = global._pgLivePool ?? (global._pgLivePool = createPool(LIVE_DB));
 
-export function getPool(mode: TradingMode = 'live'): Pool {
-  return mode === 'paper' ? paperPool : livePool;
+// Kept for backwards compatibility — always returns livePool
+export function getPool(_mode?: string): Pool {
+  return livePool;
 }
 
 export function query<T extends QueryResultRow = QueryResultRow>(
   sql: string,
   params?: any[],
-  mode: TradingMode = 'live',
 ) {
-  return getPool(mode).query<T>(sql, params);
+  return livePool.query<T>(sql, params);
 }
 
 export async function withTransaction<T>(
   fn: (client: PoolClient) => Promise<T>,
-  mode: TradingMode = 'live',
 ): Promise<T> {
-  const client = await getPool(mode).connect();
+  const client = await livePool.connect();
   try {
     await client.query('BEGIN');
     const result = await fn(client);
@@ -60,9 +53,9 @@ export async function withTransaction<T>(
   }
 }
 
-export async function isDbAvailable(mode: TradingMode = 'live'): Promise<boolean> {
+export async function isDbAvailable(): Promise<boolean> {
   try {
-    await getPool(mode).query('SELECT 1');
+    await livePool.query('SELECT 1');
     return true;
   } catch {
     return false;

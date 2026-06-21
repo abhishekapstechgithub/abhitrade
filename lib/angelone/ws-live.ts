@@ -234,9 +234,20 @@ class LiveFeedManager {
       }
       // Raw tick key for WebSocket proxy / option chain
       pipeline.setex(`at:live:tick:${t.exchangeType}:${t.token}`, TTL, JSON.stringify(t));
+      // Token-keyed LTP for paper trading engine (strategy-api reads this)
+      pipeline.setex(`at:market:ltp:token:${t.token}`, TTL, String(t.ltp));
     }
 
     await pipeline.exec().catch(e => console.warn('[ws-live] Redis flush error:', e.message));
+
+    // Publish OHLCV ticks to Redis pub/sub — strategy-api WebSocket streams consume this
+    for (const t of ticks) {
+      redis.publish('market:ticks', JSON.stringify({
+        token: t.token, exchange: t.exchange,
+        ltp: t.ltp, open: t.open, high: t.high, low: t.low, close: t.close,
+        volume: t.volume, ts: t.ts,
+      })).catch(() => {});
+    }
 
     // ── Postgres UNNEST batch upsert ────────────────────────────────────────────
     const rows = ticks.filter(t => TOKEN_SYMBOL.has(t.token));

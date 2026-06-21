@@ -37,7 +37,6 @@ services:
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_DB_LIVE=abhitrade_live
-      - POSTGRES_DB_PAPER=abhitrade_papertrade
       - POSTGRES_USER=${POSTGRES_USER:-tradekaro}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-tradekaro}
       - NEXT_PUBLIC_API_URL=http://localhost/api

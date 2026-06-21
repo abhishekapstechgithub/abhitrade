@@ -233,6 +233,9 @@ function LoginContent() {
         return;
       }
       if (data.user) setUser(data.user);
+      if (data.accessToken) {
+        try { localStorage.setItem('tk_access_token', data.accessToken); } catch { /* ignore */ }
+      }
       router.push(from);
     } catch {
       setSiError('Network error. Please try again.');
@@ -303,6 +306,9 @@ function LoginContent() {
         return;
       }
       if (data.user) setUser(data.user);
+      if (data.accessToken) {
+        try { localStorage.setItem('tk_access_token', data.accessToken); } catch { /* ignore */ }
+      }
       router.push(from);
     } catch {
       setSuError('Network error. Please try again.');

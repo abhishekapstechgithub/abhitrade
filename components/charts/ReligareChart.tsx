@@ -74,7 +74,7 @@ export function ReligareChart({
     hdr:        'y',
     title:      'n',
     headsup:    'y',
-    buysell:    'y',
+    buysell:    'n',
     lookup:     'y',
     theme:      themeParam,
     span:       '',

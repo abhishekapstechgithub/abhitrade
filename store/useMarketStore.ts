@@ -61,7 +61,16 @@ export const useMarketStore = create<MarketStore>((set, get) => ({
       const changePercent = prevClose > 0
         ? parseFloat(((change / prevClose) * 100).toFixed(2))
         : idx.changePercent;
-      return { ...idx, ltp: tick.ltp, change, changePercent };
+      return {
+        ...idx,
+        ltp: tick.ltp,
+        change,
+        changePercent,
+        open:      tick.open  && tick.open  > 0 ? tick.open  : idx.open,
+        high:      tick.high  && tick.high  > 0 ? Math.max(tick.high, idx.high || 0) : idx.high,
+        low:       tick.low   && tick.low   > 0 ? (idx.low > 0 ? Math.min(tick.low, idx.low) : tick.low) : idx.low,
+        prevClose: tick.close && tick.close > 0 ? tick.close : idx.prevClose,
+      };
     });
 
     return { indices: newIndices, priceDirections: dirs, priceMap: newPriceMap };

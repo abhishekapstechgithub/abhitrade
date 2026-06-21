@@ -1,6 +1,5 @@
 import { NextRequest } from 'next/server';
 import { getSession, SESSION_COOKIE, type SessionData } from './session';
-import type { TradingMode } from './db/client';
 
 export interface AuthPayload {
   sub: string;   // userId
@@ -32,9 +31,4 @@ export async function requireAuth(req: NextRequest): Promise<AuthPayload> {
   return payload;
 }
 
-/** Read the X-Trading-Mode header set by the frontend. Defaults to 'live'. */
-export function getTradingMode(req: NextRequest): TradingMode {
-  return req.headers.get('x-trading-mode') === 'paper' ? 'paper' : 'live';
-}
-
-export type { TradingMode, SessionData };
+export type { SessionData };

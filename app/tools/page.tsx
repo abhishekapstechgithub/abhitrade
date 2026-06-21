@@ -8,7 +8,7 @@ const TOOL_GROUPS: { title: string; col: string; tools: { label: string; icon: E
     title: 'Trading Tools', col: '41,121,255',
     tools: [
       { label:'Option Chain',      icon:BarChart2,    href:'/?tab=option-chain', desc:'Live OI, IV, Greeks' },
-      { label:'Strategy Builder',  icon:Layers,       href:'/?tab=strategies',   desc:'Build option strategies' },
+      { label:'Strategy Builder',  icon:Layers,       href:'/strategy/builder',  desc:'Build option strategies' },
       { label:'OI Charts',         icon:Activity,     href:'#',                         desc:'Open interest analysis' },
       { label:'IV Chart',          icon:TrendingUp,   href:'#',                         desc:'Implied volatility trends' },
       { label:'Greeks Calculator', icon:Calculator,   href:'/tools/calculators',        desc:'Delta, Gamma, Theta, Vega' },

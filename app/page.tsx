@@ -1,8 +1,8 @@
 'use client';
 import {
   ArrowUpRight, BarChart2, ChevronRight, Clock, Eye,
-  Loader2, Newspaper, PieChart, RefreshCw,
-  Settings2, Star, TrendingDown, TrendingUp, Zap,
+  Loader2, PieChart, RefreshCw,
+  Settings2, Star, TrendingDown, TrendingUp,
 } from 'lucide-react';
 import { useMarketStore } from '@/store/useMarketStore';
 import { useUIStore } from '@/store/useUIStore';
@@ -12,7 +12,7 @@ import { useAngelOnePrices } from '@/hooks/useAngelOneWs';
 import { WatchlistItem } from '@/types';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import React, { Suspense, useId } from 'react';
+import React, { Suspense } from 'react';
 import { OptionChain } from '@/components/markets/OptionChain';
 import { StockComposition } from '@/components/markets/StockComposition';
 import { FavouriteStrategies } from '@/components/markets/FavouriteStrategies';
@@ -24,7 +24,6 @@ const PURPLE  = '170,0,255';
 const ORANGE  = '249,115,22';
 const EMERALD = '16,185,129';
 const RED     = '220,38,38';
-const GOLD    = '255,214,0';
 
 function G(col: string, a = 0.1) { return `rgba(${col},${a})`; }
 function C(col: string)           { return `rgb(${col})`; }
@@ -54,113 +53,6 @@ interface MarketMoverItem {
 }
 
 // ── Mock / seed data ───────────────────────────────────────────────────────────
-const NIFTY_SPARK     = [22100,22200,22150,22300,22250,22380,22410,22456];
-const SENSEX_SPARK    = [73200,73400,73350,73600,73550,73780,73820,73891];
-const BANKNIFTY_SPARK = [47800,47950,47900,48100,48050,48200,48220,48234];
-const FINNIFTY_SPARK  = [21800,21900,21850,22000,21980,22100,22110,22123];
-const MIDCP_SPARK     = [44200,44350,44300,44500,44450,44600,44620,44650];
-
-const SECTORS = [
-  { name:'BANK',    pct:+1.8 }, { name:'IT',      pct:-0.6 },
-  { name:'PHARMA',  pct:+2.1 }, { name:'AUTO',    pct:+0.9 },
-  { name:'ENERGY',  pct:-1.2 }, { name:'METAL',   pct:+0.4 },
-  { name:'FMCG',    pct:-0.3 }, { name:'REALTY',  pct:+3.2 },
-  { name:'INFRA',   pct:+1.1 }, { name:'MEDIA',   pct:-0.8 },
-  { name:'TELECOM', pct:+0.7 }, { name:'PSU',     pct:+1.5 },
-];
-
-const AI_STRATEGIES = [
-  { name:'Bull Call Spread', badge:'Bullish', col:BLUE,    sym:'NIFTY',     expiry:'26 Jun', confidence:87, pop:72, maxProfit:8500,  maxLoss:1500,  risk:'Low',    pnl:+2134 },
-  { name:'Bear Put Spread',  badge:'Bearish', col:RED,     sym:'BANKNIFTY', expiry:'26 Jun', confidence:74, pop:68, maxProfit:6200,  maxLoss:2000,  risk:'Medium', pnl:-340  },
-  { name:'Iron Condor',      badge:'Neutral', col:ORANGE,  sym:'NIFTY',     expiry:'03 Jul', confidence:81, pop:78, maxProfit:4000,  maxLoss:1000,  risk:'Low',    pnl:+890  },
-  { name:'Short Straddle',   badge:'Neutral', col:PURPLE,  sym:'FINNIFTY',  expiry:'26 Jun', confidence:69, pop:65, maxProfit:3500,  maxLoss:-1,    risk:'High',   pnl:+1245 },
-  { name:'Covered Call',     badge:'Income',  col:EMERALD, sym:'TCS',       expiry:'31 Jul', confidence:83, pop:80, maxProfit:2200,  maxLoss:18000, risk:'Medium', pnl:+567  },
-];
-
-const OC_SNAP = {
-  tabs: ['NIFTY','BANKNIFTY','FINNIFTY'] as const,
-  data: {
-    NIFTY:     { spot:22456.8, pcr:1.23, maxPain:22400, oi:'₹2.8L Cr', strikes:[{k:22300,ce:28450,pe:8920},{k:22400,ce:18230,pe:14560},{k:22500,ce:8940,pe:28760}] },
-    BANKNIFTY: { spot:48234.5, pcr:0.98, maxPain:48000, oi:'₹1.2L Cr', strikes:[{k:48000,ce:24560,pe:9840},{k:48200,ce:14230,pe:18450},{k:48400,ce:7890,pe:29340}] },
-    FINNIFTY:  { spot:22123.4, pcr:1.12, maxPain:22000, oi:'₹48K Cr',  strikes:[{k:21900,ce:18900,pe:7430},{k:22000,ce:12340,pe:14230},{k:22100,ce:6780,pe:21450}] },
-  } as Record<string, {spot:number;pcr:number;maxPain:number;oi:string;strikes:{k:number;ce:number;pe:number}[]}>,
-};
-
-const NEWS_ITEMS = [
-  { time:'10:05', cat:'Market',    headline:'SEBI proposes new F&O margin rules effective July 2026', sentiment:'neutral' },
-  { time:'09:58', cat:'Economy',   headline:'RBI keeps repo rate unchanged at 6.25% in June MPC meet', sentiment:'bullish' },
-  { time:'09:45', cat:'Corporate', headline:'TCS Q4 results beat estimates; stock up 2.3% in early trade', sentiment:'bullish' },
-  { time:'09:30', cat:'Global',    headline:'US Fed signals one rate cut in 2026; Asian markets rally', sentiment:'bullish' },
-  { time:'09:15', cat:'Market',    headline:'Nifty opens above 22,400 amid broad-based buying', sentiment:'bullish' },
-  { time:'08:52', cat:'Economy',   headline:'India CPI inflation eases to 4.2% in May, lowest in 18 months', sentiment:'bullish' },
-];
-
-const VOL_SHOCKERS = [
-  { sym:'ZOMATO',  ltp: 214.5, chg:+5.8, extra:'+420%' },
-  { sym:'PAYTM',   ltp: 342.8, chg:-3.2, extra:'+285%' },
-  { sym:'ADANI',   ltp: 892.3, chg:+2.1, extra:'+190%' },
-  { sym:'YESBANK', ltp:  21.4, chg:+8.4, extra:'+165%' },
-  { sym:'IRFC',    ltp: 148.7, chg:+3.9, extra:'+148%' },
-];
-
-const OI_LONG = [
-  { sym:'NIFTY 22500 CE',      ltp:  88.4, chg:+12.4, extra:'+28%' },
-  { sym:'BANKNIFTY 48500 CE',  ltp: 124.6, chg:+18.2, extra:'+22%' },
-  { sym:'RELIANCE FUT',        ltp:2892.0, chg:+2.1,  extra:'+18%' },
-  { sym:'TCS FUT',             ltp:3847.0, chg:+1.8,  extra:'+15%' },
-  { sym:'SBIN FUT',            ltp: 782.4, chg:+3.4,  extra:'+12%' },
-];
-
-const OI_SHORT = [
-  { sym:'NIFTY 22200 PE',      ltp:  62.8, chg:-14.2, extra:'+32%' },
-  { sym:'BANKNIFTY 47500 PE',  ltp:  98.4, chg:-18.4, extra:'+24%' },
-  { sym:'HDFC FUT',            ltp:1748.0, chg:-1.9,  extra:'+19%' },
-  { sym:'INFY FUT',            ltp:1432.0, chg:-2.4,  extra:'+16%' },
-  { sym:'ICICIBANK FUT',       ltp:1124.0, chg:-1.6,  extra:'+13%' },
-];
-
-// ── Sparkline SVG ──────────────────────────────────────────────────────────────
-function Sparkline({ data, positive, width = 72, height = 32 }: {
-  data: number[]; positive: boolean; width?: number; height?: number;
-}) {
-  const uid = useId();
-  if (data.length < 2) return null;
-  const min = Math.min(...data);
-  const max = Math.max(...data);
-  const range = (max - min) || 1;
-  const pts = data.map((v, i) => {
-    const x = (i / (data.length - 1)) * width;
-    const y = height - ((v - min) / range) * (height - 4) - 2;
-    return [x, y] as [number, number];
-  });
-  const line = pts.map(([x, y]) => `${x},${y}`).join(' L ');
-  const area = `M ${pts[0][0]},${pts[0][1]} L ${line} L ${width},${height} L 0,${height} Z`;
-  const stroke = positive ? '#16a34a' : '#dc2626';
-  return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ overflow:'visible' }}>
-      <defs>
-        <linearGradient id={`sk-${uid}`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={stroke} stopOpacity="0.25" />
-          <stop offset="100%" stopColor={stroke} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <path d={area} fill={`url(#sk-${uid})`} />
-      <path d={`M ${line}`} fill="none" stroke={stroke} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function ConfBar({ value, col }: { value: number; col: string }) {
-  return (
-    <div className="flex items-center gap-2">
-      <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background:`rgba(${col},0.15)` }}>
-        <div className="h-full rounded-full" style={{ width:`${value}%`, background:`rgb(${col})` }} />
-      </div>
-      <span className="text-[10px] font-bold w-7 text-right shrink-0" style={{ color:`rgb(${col})` }}>{value}%</span>
-    </div>
-  );
-}
-
 function PanelHeader({ title, icon, href }: { title: string; icon: React.ReactNode; href?: string }) {
   return (
     <div className="flex items-center justify-between px-3 py-2.5 shrink-0"
@@ -284,9 +176,10 @@ function DashboardContent() {
     <div className="max-w-[1600px] mx-auto px-4 py-3 space-y-3 relative z-10">
       <SubTickerBar />
       <MarketSnapshotRow />
-      <AITradeOpportunitiesRow />
-      <CenterRow watchlist={dashWatchlist} onOrder={openOrderPanel} />
-      <BottomRow />
+      <div className="grid grid-cols-1 xl:grid-cols-[1.5fr_1fr] gap-3" style={{ minHeight: 400 }}>
+        <DashWatchlistPanel items={dashWatchlist} onOrder={openOrderPanel} />
+        <TopMoversTabPanel />
+      </div>
       <MarketsSection />
     </div>
   );
@@ -304,24 +197,11 @@ function SubTickerBar() {
     return () => clearInterval(id);
   }, []);
 
-  const h = parseInt(now.toLocaleString('en-IN', { hour:'2-digit', hour12:false, timeZone:'Asia/Kolkata' }), 10);
-  const m = parseInt(now.toLocaleString('en-IN', { minute:'2-digit', timeZone:'Asia/Kolkata' }), 10);
-  const day = new Date(now.toLocaleString('en-US', { timeZone:'Asia/Kolkata' })).getDay();
-  const isOpen = day >= 1 && day <= 5 && (h > 9 || (h === 9 && m >= 15)) && (h < 15 || (h === 15 && m < 30));
-
   const timeStr = now.toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:true, timeZone:'Asia/Kolkata' });
   const dateStr = now.toLocaleDateString('en-IN', { weekday:'short', day:'2-digit', month:'short', timeZone:'Asia/Kolkata' });
 
   return (
     <div className="glass rounded-xl px-3 py-1.5 flex items-center gap-3 overflow-x-auto no-scrollbar text-[11px]">
-      <div className="flex items-center gap-1.5 shrink-0">
-        <span className={`w-2 h-2 rounded-full shrink-0 ${isOpen ? 'animate-pulse' : ''}`}
-          style={{ background: isOpen ? 'var(--accent-green)' : 'var(--accent-red)' }} />
-        <span className="font-bold" style={{ color: isOpen ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-          {isOpen ? 'MARKET OPEN' : 'MARKET CLOSED'}
-        </span>
-      </div>
-      <div className="w-px h-4 shrink-0" style={{ background:'var(--panel-divider)' }} />
       <div className="flex items-center gap-1.5 shrink-0" style={{ color:'var(--text-dim)' }}>
         <Clock size={11} />
         <span className="font-mono">{timeStr}</span>
@@ -355,11 +235,11 @@ function SubTickerBar() {
 // 2. MARKET SNAPSHOT ROW
 // ─────────────────────────────────────────────────────────────────────────────
 const INDEX_CARDS = [
-  { searchKey:'NIFTY',    label:'NIFTY 50',   spark:NIFTY_SPARK,     mockLtp:22456.80, mockPct:+1.2  },
-  { searchKey:'SENSEX',   label:'SENSEX',      spark:SENSEX_SPARK,    mockLtp:73891.20, mockPct:+0.8  },
-  { searchKey:'BANK',     label:'BANKNIFTY',   spark:BANKNIFTY_SPARK, mockLtp:48234.56, mockPct:+1.5  },
-  { searchKey:'FIN',      label:'FINNIFTY',    spark:FINNIFTY_SPARK,  mockLtp:22123.45, mockPct:+0.9  },
-  { searchKey:'MIDCP',    label:'MIDCPNIFTY',  spark:MIDCP_SPARK,     mockLtp:44650.30, mockPct:+0.6  },
+  { searchKey:'NIFTY',    label:'NIFTY 50',  mockLtp:22456.80, mockPct:+1.2 },
+  { searchKey:'SENSEX',   label:'SENSEX',     mockLtp:73891.20, mockPct:+0.8 },
+  { searchKey:'BANK',     label:'BANKNIFTY',  mockLtp:48234.56, mockPct:+1.5 },
+  { searchKey:'FIN',      label:'FINNIFTY',   mockLtp:22123.45, mockPct:+0.9 },
+  { searchKey:'MIDCP',    label:'MIDCPNIFTY', mockLtp:44650.30, mockPct:+0.6 },
 ];
 
 function MarketSnapshotRow() {
@@ -377,7 +257,7 @@ function MarketSnapshotRow() {
 }
 
 function IndexSnapshotCard({ card }: {
-  card: { label:string; spark:number[]; ltp:number; chg:number; pct:number };
+  card: { label:string; ltp:number; chg:number; pct:number };
 }) {
   const pos = card.pct >= 0;
   return (
@@ -389,11 +269,8 @@ function IndexSnapshotCard({ card }: {
         </span>
       </div>
       <div className="text-xl font-bold font-mono" style={{ color:'var(--text-bright)' }}>{formatNumber(card.ltp)}</div>
-      <div className="flex items-end justify-between">
-        <span className="text-[10px] font-mono" style={{ color: gainColor(pos) }}>
-          {pos ? '+' : ''}{formatNumber(Math.abs(card.chg))}
-        </span>
-        <Sparkline data={card.spark} positive={pos} />
+      <div className="text-[10px] font-mono" style={{ color: gainColor(pos) }}>
+        {pos ? '+' : ''}{formatNumber(Math.abs(card.chg))}
       </div>
     </div>
   );
@@ -437,163 +314,7 @@ function MarketBreadthCard() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 3. AI TRADE OPPORTUNITIES ROW
-// ─────────────────────────────────────────────────────────────────────────────
-function AITradeOpportunitiesRow() {
-  return (
-    <div className="glass rounded-2xl overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-2.5 shrink-0"
-        style={{ borderBottom:'1px solid var(--panel-divider)', background:G(BLUE, 0.04) }}>
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-lg flex items-center justify-center"
-            style={{ background:G(BLUE, 0.2), border:`1px solid rgba(${BLUE},0.4)` }}>
-            <Zap size={13} style={{ color:C(BLUE) }} />
-          </div>
-          <span className="text-sm font-bold" style={{ color:'var(--text-bright)' }}>AI Trade Opportunities</span>
-          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold"
-            style={{ background:G(BLUE, 0.15), color:C(BLUE), border:`1px solid rgba(${BLUE},0.3)` }}>
-            5 Active
-          </span>
-        </div>
-        <Link href="/?tab=strategies" className="text-[11px] font-semibold flex items-center gap-1 hover:opacity-75"
-          style={{ color:C(CYAN) }}>
-          View All <ArrowUpRight size={11} />
-        </Link>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1fr_1fr_1fr_290px]">
-        {AI_STRATEGIES.map((s, i) => (
-          <div key={s.name}
-            style={{ borderRight:`1px solid var(--panel-divider)`, borderBottom: i < AI_STRATEGIES.length ? `1px solid var(--panel-divider)` : 'none' }}>
-            <AIStrategyCard s={s} />
-          </div>
-        ))}
-        <OptionChainSnapshotCard />
-      </div>
-    </div>
-  );
-}
-
-function AIStrategyCard({ s }: { s: typeof AI_STRATEGIES[0] }) {
-  const pos = s.pnl >= 0;
-  return (
-    <div className="p-4 flex flex-col gap-3">
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
-            style={{ background:G(s.col, 0.15), color:C(s.col) }}>
-            {s.badge}
-          </span>
-          <div className="text-xs font-bold mt-1.5" style={{ color:'var(--text-secondary)' }}>{s.name}</div>
-          <div className="text-[10px]" style={{ color:'var(--text-label)' }}>{s.sym} · {s.expiry}</div>
-        </div>
-        <div className="text-right shrink-0">
-          <div className="text-[10px]" style={{ color:'var(--text-label)' }}>Live P&amp;L</div>
-          <div className="text-sm font-bold font-mono" style={{ color: gainColor(pos) }}>
-            {pos ? '+' : ''}₹{Math.abs(s.pnl).toLocaleString('en-IN')}
-          </div>
-        </div>
-      </div>
-      <div>
-        <div className="text-[10px] mb-1" style={{ color:'var(--text-label)' }}>AI Confidence</div>
-        <ConfBar value={s.confidence} col={s.col} />
-      </div>
-      <div className="grid grid-cols-2 gap-1.5 text-[10px]">
-        {([
-          ['POP',        `${s.pop}%`,                         'var(--text-secondary)'],
-          ['Risk',       s.risk, s.risk==='Low'?'var(--accent-green)':s.risk==='High'?'var(--accent-red)':'var(--accent-blue)'],
-          ['Max Profit', s.maxProfit > 0 ? `₹${s.maxProfit.toLocaleString('en-IN')}` : '∞', 'var(--accent-green)'],
-          ['Max Loss',   s.maxLoss < 0 ? 'Unlimited' : `₹${s.maxLoss.toLocaleString('en-IN')}`, 'var(--accent-red)'],
-        ] as [string,string,string][]).map(([l, v, col]) => (
-          <div key={l} className="rounded-lg px-2 py-1.5"
-            style={{ background:'var(--card-inner-bg)', border:'1px solid var(--card-inner-border)' }}>
-            <div style={{ color:'var(--text-label)' }}>{l}</div>
-            <div className="font-bold mt-0.5" style={{ color: col }}>{v}</div>
-          </div>
-        ))}
-      </div>
-      <Link href="/?tab=strategies">
-        <div className="flex items-center justify-center gap-1 py-1.5 rounded-lg text-[11px] font-semibold hover:opacity-85 transition-opacity"
-          style={{ background:G(s.col, 0.12), color:C(s.col), border:`1px solid rgba(${s.col},0.3)` }}>
-          View Strategy <ChevronRight size={11} />
-        </div>
-      </Link>
-    </div>
-  );
-}
-
-function OptionChainSnapshotCard() {
-  const [idx, setIdx] = React.useState<typeof OC_SNAP.tabs[number]>('NIFTY');
-  const d = OC_SNAP.data[idx];
-  return (
-    <div className="flex flex-col" style={{ borderLeft:'1px solid var(--panel-divider)' }}>
-      <div className="px-3 py-2" style={{ borderBottom:'1px solid var(--panel-divider)', background:'var(--panel-bg)' }}>
-        <span className="text-[11px] font-bold" style={{ color:'var(--text-secondary)' }}>Option Chain Snapshot</span>
-      </div>
-      <div className="flex" style={{ borderBottom:'1px solid var(--panel-divider)' }}>
-        {OC_SNAP.tabs.map(tab => (
-          <button key={tab} onClick={() => setIdx(tab)}
-            className="flex-1 py-1.5 text-[10px] font-bold transition-all"
-            style={{
-              color: idx===tab ? C(BLUE) : 'var(--text-dim)',
-              borderBottom: idx===tab ? `2px solid ${C(BLUE)}` : '2px solid transparent',
-              background: idx===tab ? G(BLUE, 0.06) : 'transparent',
-            }}>
-            {tab}
-          </button>
-        ))}
-      </div>
-      <div className="grid grid-cols-2 gap-1.5 p-2.5" style={{ borderBottom:'1px solid var(--panel-divider)' }}>
-        {([
-          ['Spot',     formatNumber(d.spot),          'var(--text-bright)'],
-          ['PCR',      String(d.pcr),                 d.pcr >= 1 ? 'var(--accent-green)' : 'var(--accent-red)'],
-          ['Max Pain', formatNumber(d.maxPain),        'var(--text-dim)'],
-          ['Total OI', d.oi,                           C(BLUE)],
-        ] as [string,string,string][]).map(([l, v, col]) => (
-          <div key={l} className="rounded-lg px-2 py-1.5"
-            style={{ background:'var(--card-inner-bg)', border:'1px solid var(--card-inner-border)' }}>
-            <div className="text-[9px]" style={{ color:'var(--text-label)' }}>{l}</div>
-            <div className="text-[11px] font-bold font-mono" style={{ color: col }}>{v}</div>
-          </div>
-        ))}
-      </div>
-      <table className="w-full text-[10px]">
-        <thead style={{ background:'var(--table-head-dim)' }}>
-          <tr>
-            <th className="px-2 py-1.5 text-left font-semibold" style={{ color:'var(--accent-green)' }}>CE OI</th>
-            <th className="px-2 py-1.5 text-center font-semibold" style={{ color:'var(--text-secondary)' }}>Strike</th>
-            <th className="px-2 py-1.5 text-right font-semibold" style={{ color:'var(--accent-red)' }}>PE OI</th>
-          </tr>
-        </thead>
-        <tbody>
-          {d.strikes.map(s => (
-            <tr key={s.k} style={{ borderBottom:'1px solid var(--row-border)' }}>
-              <td className="px-2 py-1.5 font-mono" style={{ color:'var(--accent-green)' }}>
-                {(s.ce / 1000).toFixed(1)}K
-              </td>
-              <td className="px-2 py-1.5 text-center font-bold" style={{ color:'var(--text-bright)' }}>
-                {s.k.toLocaleString('en-IN')}
-              </td>
-              <td className="px-2 py-1.5 text-right font-mono" style={{ color:'var(--accent-red)' }}>
-                {(s.pe / 1000).toFixed(1)}K
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <div className="p-2.5 mt-auto" style={{ borderTop:'1px solid var(--panel-divider)' }}>
-        <Link href="/?tab=option-chain">
-          <button className="w-full py-1.5 rounded-lg text-[11px] font-semibold"
-            style={{ background:G(BLUE, 0.12), color:C(BLUE), border:`1px solid rgba(${BLUE},0.3)` }}>
-            Open Full Option Chain →
-          </button>
-        </Link>
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 4. CENTER 4-COLUMN ROW
+// 4. MAIN PANEL ROW
 // ─────────────────────────────────────────────────────────────────────────────
 const SIG_MAP: Record<string, { label:string; col:string }> = {
   'STRONG BUY': { label:'STRONG BUY', col:EMERALD },
@@ -608,69 +329,8 @@ function getSignal(chg: number) {
   return 'SELL';
 }
 
-function CenterRow({ watchlist, onOrder }: {
-  watchlist: WatchlistItem[];
-  onOrder: (sym: string, side: 'BUY' | 'SELL') => void;
-}) {
-  const [gridCols, setGridCols] = React.useState('repeat(4,1fr)');
-  React.useEffect(() => {
-    function update() {
-      const w = window.innerWidth;
-      if (w >= 1280)      setGridCols('1fr 1.25fr 1.5fr 1.6fr');
-      else if (w >= 768)  setGridCols('repeat(2,1fr)');
-      else                setGridCols('1fr');
-    }
-    update();
-    window.addEventListener('resize', update);
-    return () => window.removeEventListener('resize', update);
-  }, []);
-
-  return (
-    <div className="grid gap-3"
-      style={{ minHeight: 380, gridTemplateColumns: gridCols }}>
-      <MarketHeatmapPanel />
-      <TopMoversTabPanel />
-      <DashWatchlistPanel items={watchlist} onOrder={onOrder} />
-      <AIMarketInsightsPanel />
-    </div>
-  );
-}
-
-function MarketHeatmapPanel() {
-  const maxAbs = Math.max(...SECTORS.map(s => Math.abs(s.pct)));
-  return (
-    <div className="glass rounded-2xl overflow-hidden flex flex-col">
-      <PanelHeader title="Market Heatmap" icon={<PieChart size={12} style={{ color:C(CYAN) }} />} href="/tools/heatmap" />
-      <div className="flex-1 p-2.5 grid grid-cols-3 gap-1.5" style={{ gridTemplateRows:'repeat(4, 1fr)' }}>
-        {SECTORS.map(s => {
-          const pos = s.pct >= 0;
-          const alpha = 0.2 + (Math.abs(s.pct) / maxAbs) * 0.65;
-          const bg = pos ? `rgba(22,163,74,${alpha.toFixed(2)})` : `rgba(220,38,38,${alpha.toFixed(2)})`;
-          return (
-            <div key={s.name} className="rounded-xl flex flex-col items-center justify-center gap-0.5 cursor-pointer hover:scale-105 transition-transform"
-              style={{ background:bg, border:'1px solid rgba(255,255,255,0.06)' }}>
-              <span className="text-[9px] font-bold tracking-wider" style={{ color:'rgba(255,255,255,0.88)' }}>{s.name}</span>
-              <span className="text-[10px] font-bold font-mono" style={{ color: pos ? '#86efac' : '#fca5a5' }}>
-                {pos ? '+' : ''}{s.pct.toFixed(1)}%
-              </span>
-            </div>
-          );
-        })}
-      </div>
-      <div className="flex items-center justify-center gap-4 px-3 pb-2.5 text-[10px]">
-        <span className="flex items-center gap-1.5" style={{ color:'var(--text-label)' }}>
-          <span className="w-3 h-3 rounded" style={{ background:'rgba(22,163,74,0.6)' }} /> Positive
-        </span>
-        <span className="flex items-center gap-1.5" style={{ color:'var(--text-label)' }}>
-          <span className="w-3 h-3 rounded" style={{ background:'rgba(220,38,38,0.6)' }} /> Negative
-        </span>
-      </div>
-    </div>
-  );
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
-// TOP MOVERS TAB PANEL (replaces chart in center row)
+// TOP MOVERS TAB PANEL
 // ─────────────────────────────────────────────────────────────────────────────
 type MoverTab = 'gainers' | 'losers' | 'volume_shockers' | 'top_by_volume' | '52w_high' | '52w_low';
 const MOVER_TABS: { key: MoverTab; label: string }[] = [
@@ -929,156 +589,3 @@ function DashWatchlistPanel({ items, onOrder }: {
   );
 }
 
-function AIMarketInsightsPanel() {
-  return (
-    <div className="glass rounded-2xl overflow-hidden flex flex-col">
-      <PanelHeader title="AI Market Insights" icon={<Zap size={12} style={{ color:C(BLUE) }} />} />
-      <div className="flex-1 p-3 flex flex-col gap-3 overflow-y-auto no-scrollbar">
-        <div className="rounded-xl p-3" style={{ background:G(EMERALD, 0.08), border:`1px solid rgba(${EMERALD},0.2)` }}>
-          <div className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color:'var(--text-label)' }}>Market Sentiment</div>
-          <div className="flex items-center gap-2 mb-2">
-            <TrendingUp size={15} style={{ color:C(EMERALD) }} />
-            <span className="text-sm font-bold" style={{ color:C(EMERALD) }}>Bullish</span>
-          </div>
-          <ConfBar value={72} col={EMERALD} />
-        </div>
-
-        <div className="space-y-2 text-[11px]">
-          {([
-            ['Leading Sector', 'Banking ▲1.8%', G(BLUE, 0.12), C(BLUE)],
-            ['Put-Call Ratio', '1.23 (Bullish)', 'transparent', 'var(--accent-green)'],
-          ] as [string,string,string,string][]).map(([l, v, bg, col]) => (
-            <div key={l} className="flex items-center justify-between">
-              <span style={{ color:'var(--text-label)' }}>{l}</span>
-              <span className="font-bold px-2 py-0.5 rounded text-[10px]"
-                style={{ background:bg, color:col }}>
-                {v}
-              </span>
-            </div>
-          ))}
-        </div>
-
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color:'var(--text-label)' }}>Support &amp; Resistance</div>
-          <div className="grid grid-cols-2 gap-2">
-            <div className="rounded-lg p-2 text-center" style={{ background:G(EMERALD, 0.1), border:`1px solid rgba(${EMERALD},0.2)` }}>
-              <div className="text-[9px]" style={{ color:'var(--text-label)' }}>Support</div>
-              <div className="text-xs font-bold font-mono" style={{ color:C(EMERALD) }}>22,200</div>
-            </div>
-            <div className="rounded-lg p-2 text-center" style={{ background:G(RED, 0.1), border:`1px solid rgba(${RED},0.2)` }}>
-              <div className="text-[9px]" style={{ color:'var(--text-label)' }}>Resistance</div>
-              <div className="text-xs font-bold font-mono" style={{ color:C(RED) }}>22,700</div>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-xl p-3 flex-1 flex flex-col gap-1.5"
-          style={{ background:G(BLUE, 0.06), border:`1px solid rgba(${BLUE},0.18)` }}>
-          <div className="text-[10px] font-semibold uppercase tracking-wider" style={{ color:C(BLUE) }}>Best Opportunity</div>
-          <div className="text-[11px] font-semibold" style={{ color:'var(--text-secondary)' }}>Iron Condor on NIFTY</div>
-          <div className="text-[10px]" style={{ color:'var(--text-label)' }}>High IVR · PCR 1.23 · Low risk setup</div>
-        </div>
-
-        <Link href="/?tab=strategies">
-          <button className="w-full py-2 rounded-xl text-[11px] font-semibold hover:opacity-85 transition-opacity"
-            style={{ background:G(BLUE, 0.12), color:C(BLUE), border:`1px solid rgba(${BLUE},0.3)` }}>
-            View Detailed Insights →
-          </button>
-        </Link>
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 5. BOTTOM 6-COLUMN ROW
-// ─────────────────────────────────────────────────────────────────────────────
-function BottomRow() {
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3" style={{ minHeight:280 }}>
-      <NewsEventsPanel />
-      <MiniMoversTable title="Volume Shockers" icon={<BarChart2 size={12} style={{ color:C(ORANGE) }} />} items={VOL_SHOCKERS} />
-      <MiniMoversTable title="OI Buildup Long"  icon={<TrendingUp size={12} style={{ color:C(EMERALD) }} />} items={OI_LONG} />
-      <MiniMoversTable title="OI Buildup Short" icon={<TrendingDown size={12} style={{ color:C(RED) }} />} items={OI_SHORT} />
-    </div>
-  );
-}
-
-const NEWS_CATS = ['All','Market','Economy','Corporate','Global'] as const;
-type NewsCat = typeof NEWS_CATS[number];
-
-function NewsEventsPanel() {
-  const [cat, setCat] = React.useState<NewsCat>('All');
-  const items = cat === 'All' ? NEWS_ITEMS : NEWS_ITEMS.filter(n => n.cat === cat);
-  return (
-    <div className="glass rounded-2xl overflow-hidden flex flex-col">
-      <PanelHeader title="News & Events" icon={<Newspaper size={12} style={{ color:C(GOLD) }} />} />
-      <div className="flex gap-0.5 px-2 py-1.5 overflow-x-auto no-scrollbar shrink-0"
-        style={{ borderBottom:'1px solid var(--panel-divider)' }}>
-        {NEWS_CATS.map(c => (
-          <button key={c} onClick={() => setCat(c)}
-            className="px-2 py-0.5 rounded text-[10px] font-semibold whitespace-nowrap transition-all"
-            style={cat===c ? { background:G(GOLD, 0.2), color:C(GOLD) } : { color:'var(--text-dim)' }}>
-            {c}
-          </button>
-        ))}
-      </div>
-      <div className="flex-1 overflow-y-auto no-scrollbar">
-        {items.map((n, i) => (
-          <div key={i} className="px-3 py-2 cursor-pointer hover:opacity-80 transition-opacity"
-            style={{ borderBottom:'1px solid var(--row-border)' }}>
-            <div className="flex items-center gap-1.5 mb-1">
-              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded"
-                style={{ background:G(GOLD, 0.15), color:C(GOLD) }}>{n.cat}</span>
-              <span className="text-[9px]" style={{ color:'var(--text-dim)' }}>{n.time}</span>
-            </div>
-            <div className="text-[10px] font-medium leading-relaxed" style={{ color:'var(--text-secondary)' }}>
-              {n.headline}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-
-function MiniMoversTable({ title, icon, items }: {
-  title: string;
-  icon: React.ReactNode;
-  items: { sym:string; ltp:number; chg:number; extra:string }[];
-}) {
-  return (
-    <div className="glass rounded-2xl overflow-hidden flex flex-col">
-      <PanelHeader title={title} icon={icon} />
-      <div className="flex-1 overflow-y-auto no-scrollbar">
-        {items.map((item, i) => {
-          const pos = item.chg >= 0;
-          return (
-            <div key={item.sym} className="flex items-center px-3 py-2 cursor-pointer"
-              style={{ borderBottom:'1px solid var(--row-border)' }}
-              onMouseEnter={e => (e.currentTarget.style.background='var(--row-hover-bg)')}
-              onMouseLeave={e => (e.currentTarget.style.background='')}>
-              <span className="text-[9px] font-bold w-4 shrink-0" style={{ color:'var(--text-dim)' }}>{i+1}</span>
-              <div className="flex-1 min-w-0 mx-1.5">
-                <div className="text-[10px] font-bold truncate" style={{ color:'var(--text-secondary)' }}>{item.sym}</div>
-              </div>
-              <div className="text-right shrink-0">
-                <div className="text-[10px] font-mono" style={{ color:'var(--text-bright)' }}>{formatNumber(item.ltp)}</div>
-                <div className="flex items-center gap-1 justify-end">
-                  <span className="text-[9px] font-bold" style={{ color: gainColor(pos) }}>
-                    {pos ? '+' : ''}{item.chg.toFixed(1)}%
-                  </span>
-                  <span className="text-[9px] font-semibold px-1 rounded"
-                    style={{ background:G(ORANGE, 0.15), color:C(ORANGE) }}>
-                    {item.extra}
-                  </span>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}

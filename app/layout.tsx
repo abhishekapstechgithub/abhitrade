@@ -6,6 +6,7 @@ import { MarketTickerProvider } from '@/components/layout/MarketTickerProvider';
 import { ThemeProvider } from '@/components/theme/ThemeProvider';
 import { ChartNavigator } from '@/components/charts/ChartNavigator';
 import { FirstLoginGuide } from '@/components/onboarding/FirstLoginGuide';
+import { TokenAutoFetch } from '@/components/auth/TokenAutoFetch';
 import Link from 'next/link';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
@@ -16,7 +17,7 @@ export const metadata: Metadata = {
 };
 
 // Hidden prefetch links — pre-warms all page routes in the background so they compile before the user clicks
-const PREFETCH_ROUTES = ['/watchlist','/portfolio','/orders','/positions','/tools','/profile','/security-master'];
+const PREFETCH_ROUTES = ['/strategy','/strategy/builder','/strategy/backtest','/watchlist','/portfolio','/orders','/positions','/tools','/profile','/security-master'];
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -41,6 +42,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <div style={{ position:'absolute', width:0, height:0, overflow:'hidden', pointerEvents:'none' }} aria-hidden>
               {PREFETCH_ROUTES.map(r => <Link key={r} href={r} prefetch={true}>{r}</Link>)}
             </div>
+            <TokenAutoFetch />
             <AppShell>{children}</AppShell>
             <ChartNavigator />
             <FirstLoginGuide />

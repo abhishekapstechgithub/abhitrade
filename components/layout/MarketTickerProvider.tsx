@@ -1,7 +1,6 @@
 'use client';
 import { useEffect } from 'react';
 import { useMarketStore } from '@/store/useMarketStore';
-import { usePaperTradingStore } from '@/store/usePaperTradingStore';
 import { useAngelOneWsInit, useAngelOnePrices } from '@/hooks/useAngelOneWs';
 import type { IndexPrice } from '@/lib/market-sync';
 
@@ -30,8 +29,6 @@ export function MarketTickerProvider({ children }: { children: React.ReactNode }
   const updateLivePrice = useMarketStore(s => s.updateLivePrice);
   const setIndexData    = useMarketStore(s => s.setIndexData);
   const fetchRealData   = useMarketStore(s => s.fetchRealData);
-  const priceMap        = useMarketStore(s => s.priceMap);
-  const syncPrices      = usePaperTradingStore(s => s.syncPrices);
 
   // Subscribe to index tokens — every tick updates the Zustand store
   useAngelOnePrices(INDEX_TOKENS, updateLivePrice);
@@ -52,11 +49,6 @@ export function MarketTickerProvider({ children }: { children: React.ReactNode }
         fetchRealData();
       });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Keep paper trading positions in sync with latest prices
-  useEffect(() => {
-    syncPrices(priceMap);
-  }, [priceMap, syncPrices]);
 
   return <>{children}</>;
 }

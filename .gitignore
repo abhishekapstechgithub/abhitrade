@@ -62,3 +62,9 @@ next-env.d.ts
 
 # Claude Code memory
 /.claude/
+
+# Large scrip master / market data files — downloaded at runtime, not in git
+OpenAPIScripMaster.json
+angledata.json
+scripdata.json
+strategy_api.json

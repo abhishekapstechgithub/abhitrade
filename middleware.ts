@@ -32,6 +32,13 @@ const PUBLIC_PATHS = [
   '/api/market-stream',
   '/api/scrips',
   '/api/instruments',
+  // Strategy-api paths — proxied by nginx to strategy-api:8000 which handles its own Bearer-token auth
+  '/api/paper',
+  '/api/scrip',
+  '/api/strategies',
+  '/api/options',
+  '/api/tokens',
+  '/api/backtests',
   '/_next',
   '/favicon.ico',
 ];

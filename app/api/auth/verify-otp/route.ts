@@ -1,9 +1,12 @@
 export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
+import jwt from 'jsonwebtoken';
 import { verifyOtp } from '@/lib/otp';
 import { getUserByEmail, getUserByName } from '@/lib/db/repositories';
 import { createSession, SESSION_COOKIE, SESSION_TTL_SECONDS } from '@/lib/session';
 import { isDbAvailable } from '@/lib/db/client';
+
+const JWT_SECRET = process.env.JWT_SECRET ?? 'abhitrade-dev-secret';
 
 export async function POST(req: NextRequest) {
   try {
@@ -62,8 +65,11 @@ export async function POST(req: NextRequest) {
       phone:  user.phone ?? '',
     });
 
+    const accessToken = jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, { expiresIn: '24h' });
+
     const res = NextResponse.json({
-      ok: true,
+      ok:          true,
+      accessToken,
       user: { id: user.id, email: user.email, name: user.name, phone: user.phone },
     });
     res.cookies.set(SESSION_COOKIE, sessionId, {
