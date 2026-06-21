@@ -1,17 +1,16 @@
 """Scrip search — Redis-first with Postgres fallback. 24 h TTL cache."""
 
-import asyncio
 import logging
 from fastapi import APIRouter, Query, BackgroundTasks
 
 from ...database import get_pool
+from ...redis_client import get_redis
 from ...services.market_data import (
     get_cached_scrip_search, cache_scrip_search, cache_scrip_detail,
 )
-from ...workers.scrip_sync import sync_scrip_master
+from ...workers.scrip_sync import sync_scrip_master, _LOCK_KEY
 
 log = logging.getLogger(__name__)
-_sync_running = False
 
 router = APIRouter(prefix="/scrip", tags=["scrip"])
 
@@ -62,18 +61,16 @@ async def search_scrip(q: str = Query(..., min_length=1, max_length=50)) -> dict
 @router.post("/sync")
 async def trigger_scrip_sync(background_tasks: BackgroundTasks) -> dict:
     """Manually trigger Angel One instrument master download + upsert into angle_scrip."""
-    global _sync_running
-    if _sync_running:
+    r = get_redis()
+    if await r.exists(_LOCK_KEY):
         return {"status": "already_running", "message": "Sync already in progress — check back in a minute"}
 
-    async def _run():
-        global _sync_running
-        _sync_running = True
+    async def _run() -> None:
         try:
             count = await sync_scrip_master()
             log.info("[scrip-sync] Manual sync complete — %d instruments upserted", count)
-        finally:
-            _sync_running = False
+        except Exception as e:
+            log.error("[scrip-sync] Manual sync error: %s", e)
 
     background_tasks.add_task(_run)
     return {"status": "started", "message": "Downloading Angel One instrument master in background…"}
@@ -81,14 +78,19 @@ async def trigger_scrip_sync(background_tasks: BackgroundTasks) -> dict:
 
 @router.get("/sync/status")
 async def scrip_sync_status() -> dict:
-    """Returns the current count of instruments in angle_scrip and whether a sync is running."""
+    """Returns instrument count, last sync time, and whether a sync is currently running."""
     pool = get_pool()
+    r    = get_redis()
+
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT COUNT(*) AS total, MAX(loaded_at) AS last_sync FROM angle_scrip"
         )
+
+    sync_running = bool(await r.exists(_LOCK_KEY))
+
     return {
         "total_instruments": row["total"] or 0,
-        "last_sync": row["last_sync"].isoformat() if row["last_sync"] else None,
-        "sync_running": _sync_running,
+        "last_sync":         row["last_sync"].isoformat() if row["last_sync"] else None,
+        "sync_running":      sync_running,
     }

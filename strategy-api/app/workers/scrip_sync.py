@@ -1,7 +1,9 @@
 """
 Daily Angel One instrument master sync.
 Downloads the open-access JSON from Angel One's CDN at 08:30 IST on weekdays.
-Also runs once immediately on service startup.
+
+Locking: uses a Redis key (scrip_sync:lock) with a 30-minute TTL so that
+only one uvicorn worker ever runs a sync at a time — safe with --workers 2+.
 """
 
 import asyncio
@@ -12,6 +14,7 @@ import aiohttp
 import pytz
 
 from ..database import get_pool
+from ..redis_client import get_redis
 
 log = logging.getLogger(__name__)
 
@@ -19,12 +22,38 @@ _IST = pytz.timezone("Asia/Kolkata")
 ANGEL_ONE_SCRIP_URL = (
     "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
 )
+_LOCK_KEY = "scrip_sync:lock"
+_LOCK_TTL = 1800  # 30 minutes — enough for the full download + upsert
+
+
+async def _acquire_lock() -> bool:
+    """Returns True if this worker acquired the sync lock, False if another worker holds it."""
+    r = get_redis()
+    result = await r.set(_LOCK_KEY, "1", nx=True, ex=_LOCK_TTL)
+    return result is True
+
+
+async def _release_lock() -> None:
+    r = get_redis()
+    await r.delete(_LOCK_KEY)
 
 
 async def sync_scrip_master() -> int:
+    """Download and upsert the Angel One instrument master. Returns number of rows upserted."""
+    if not await _acquire_lock():
+        log.info("[scrip-sync] Another worker is already syncing — skipping")
+        return 0
+
+    try:
+        return await _do_sync()
+    finally:
+        await _release_lock()
+
+
+async def _do_sync() -> int:
     log.info("[scrip-sync] Downloading AngelOne instrument master…")
     try:
-        timeout = aiohttp.ClientTimeout(total=120)
+        timeout = aiohttp.ClientTimeout(total=180)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(ANGEL_ONE_SCRIP_URL) as resp:
                 resp.raise_for_status()
@@ -37,12 +66,12 @@ async def sync_scrip_master() -> int:
         log.error("[scrip-sync] Unexpected response format")
         return 0
 
-    log.info("[scrip-sync] Downloaded %d instruments", len(data))
+    log.info("[scrip-sync] Downloaded %d instruments — upserting…", len(data))
     pool  = get_pool()
     count = 0
 
-    for i in range(0, len(data), 1000):
-        batch = data[i : i + 1000]
+    for i in range(0, len(data), 500):
+        batch = data[i : i + 500]
         rows: list[tuple] = []
 
         for r in batch:
@@ -99,18 +128,16 @@ async def sync_scrip_master() -> int:
             )
         count += len(rows)
 
+        # Yield the event loop between batches so other requests aren't blocked
+        await asyncio.sleep(0)
+
     log.info("[scrip-sync] Upserted %d instruments", count)
     return count
 
 
 async def run_daily_scrip_sync() -> None:
+    """Runs the scrip sync at 08:30 IST on weekdays. No startup sync — use the manual button."""
     log.info("[scrip-sync] Scheduler started — will sync at 08:30 IST on weekdays")
-
-    # Run once on startup (best-effort — don't block service startup)
-    try:
-        await sync_scrip_master()
-    except Exception as e:
-        log.warning("[scrip-sync] Startup sync failed (non-fatal): %s", e)
 
     while True:
         now    = datetime.now(_IST)
@@ -118,7 +145,7 @@ async def run_daily_scrip_sync() -> None:
         if now >= target:
             target += timedelta(days=1)
 
-        # Skip weekend days
+        # Skip weekends
         while target.weekday() >= 5:
             target += timedelta(days=1)
 
@@ -130,4 +157,4 @@ async def run_daily_scrip_sync() -> None:
             try:
                 await sync_scrip_master()
             except Exception as e:
-                log.error("[scrip-sync] Sync error: %s", e)
+                log.error("[scrip-sync] Scheduled sync error: %s", e)
