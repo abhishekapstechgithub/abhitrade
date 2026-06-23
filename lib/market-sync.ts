@@ -129,6 +129,117 @@ ON CONFLICT (exchange, symbol) DO UPDATE SET
   synced_at      = NOW()
 `;
 
+// ── Bulk-update angle_scrip with live prices (matched by token PK) ───────────
+// Uses a single UPDATE ... FROM (SELECT UNNEST(...)) to minimise round-trips.
+async function updateAngleScripPrices(quotes: MarketQuoteFull[]): Promise<void> {
+  if (!quotes.length) return;
+  const pool = getPool('live');
+
+  // Build typed arrays for unnest — Postgres will cast them via the column types
+  const tokens:    string[]  = [];
+  const ltps:      (number|null)[] = [];
+  const opens:     (number|null)[] = [];
+  const highs:     (number|null)[] = [];
+  const lows:      (number|null)[] = [];
+  const closes:    (number|null)[] = [];
+  const netChgs:   (number|null)[] = [];
+  const chgPcts:   (number|null)[] = [];
+  const vols:      (number|null)[] = [];
+  const ois:       (number|null)[] = [];
+  const avgPrices: (number|null)[] = [];
+  const w52Highs:  (number|null)[] = [];
+  const w52Lows:   (number|null)[] = [];
+  const upCirks:   (string|null)[] = [];
+  const loCirks:   (string|null)[] = [];
+  const totBuys:   (number|null)[] = [];
+  const totSells:  (number|null)[] = [];
+
+  for (const q of quotes) {
+    tokens.push(q.symbolToken);
+    ltps.push(q.ltp         ?? null);
+    opens.push(q.open       ?? null);
+    highs.push(q.high       ?? null);
+    lows.push(q.low         ?? null);
+    closes.push(q.close     ?? null);
+    netChgs.push(q.netChange    ?? null);
+    chgPcts.push(q.percentChange ?? null);
+    vols.push(q.tradeVolume  ?? null);
+    ois.push(q.opnInterest   ?? null);
+    avgPrices.push(q.avgPrice    ?? null);
+    w52Highs.push(q['52WeekHigh'] ?? null);
+    w52Lows.push(q['52WeekLow']   ?? null);
+    upCirks.push(q.upperCircuit   ?? null);
+    loCirks.push(q.lowerCircuit   ?? null);
+    totBuys.push(q.totBuyQuan     ?? null);
+    totSells.push(q.totSellQuan   ?? null);
+  }
+
+  const sql = `
+    UPDATE angle_scrip AS a
+    SET
+      ltp           = d.ltp::numeric,
+      open          = d.open::numeric,
+      high          = d.high::numeric,
+      low           = d.low::numeric,
+      close         = d.close::numeric,
+      net_change    = d.net_change::numeric,
+      change_pct    = d.change_pct::numeric,
+      volume        = d.volume::bigint,
+      open_interest = d.open_interest::bigint,
+      avg_price     = d.avg_price::numeric,
+      week52_high   = d.week52_high::numeric,
+      week52_low    = d.week52_low::numeric,
+      upper_circuit = d.upper_circuit,
+      lower_circuit = d.lower_circuit,
+      tot_buy_qty   = d.tot_buy_qty::bigint,
+      tot_sell_qty  = d.tot_sell_qty::bigint,
+      ltp_updated_at = NOW()
+    FROM (
+      SELECT
+        UNNEST($1::text[])    AS token,
+        UNNEST($2::text[])    AS ltp,
+        UNNEST($3::text[])    AS open,
+        UNNEST($4::text[])    AS high,
+        UNNEST($5::text[])    AS low,
+        UNNEST($6::text[])    AS close,
+        UNNEST($7::text[])    AS net_change,
+        UNNEST($8::text[])    AS change_pct,
+        UNNEST($9::text[])    AS volume,
+        UNNEST($10::text[])   AS open_interest,
+        UNNEST($11::text[])   AS avg_price,
+        UNNEST($12::text[])   AS week52_high,
+        UNNEST($13::text[])   AS week52_low,
+        UNNEST($14::text[])   AS upper_circuit,
+        UNNEST($15::text[])   AS lower_circuit,
+        UNNEST($16::text[])   AS tot_buy_qty,
+        UNNEST($17::text[])   AS tot_sell_qty
+    ) AS d
+    WHERE a.token = d.token
+  `;
+
+  // Serialize nulls as empty strings then cast — Postgres handles '' as NULL for numeric when cast
+  const toTextArr = (arr: (number | string | null)[]) =>
+    arr.map(v => (v == null ? null : String(v)));
+
+  try {
+    const result = await pool.query(sql, [
+      tokens,
+      toTextArr(ltps),    toTextArr(opens),   toTextArr(highs),
+      toTextArr(lows),    toTextArr(closes),  toTextArr(netChgs),
+      toTextArr(chgPcts), toTextArr(vols),    toTextArr(ois),
+      toTextArr(avgPrices), toTextArr(w52Highs), toTextArr(w52Lows),
+      upCirks.map(v => v ?? null),             // keep as strings
+      loCirks.map(v => v ?? null),
+      toTextArr(totBuys), toTextArr(totSells),
+    ]);
+    if ((result.rowCount ?? 0) > 0) {
+      console.log(`[market-sync] angle_scrip updated: ${result.rowCount} rows`);
+    }
+  } catch (e) {
+    console.warn('[market-sync] angle_scrip update failed:', (e as Error).message);
+  }
+}
+
 // ── Cache a batch of quotes into Redis ────────────────────────────────────────
 async function cacheQuotes(
   quotes: MarketQuoteFull[],
@@ -316,6 +427,10 @@ export async function syncIndexPrices(): Promise<void> {
       pipeline.setex(quoteByToken(q.symbolToken), 90, JSON.stringify(tokenPayload));
     }
     await pipeline.exec().catch(() => {});
+
+    // Also persist index prices to angle_scrip (fire-and-forget)
+    updateAngleScripPrices(quotes).catch(() => {});
+
     console.log(`[market-sync] Index prices updated (${quotes.length} indices)`);
   } catch (e) {
     console.warn('[market-sync] syncIndexPrices failed:', (e as Error).message);
@@ -437,7 +552,11 @@ export async function runEquitySync(): Promise<{ count: number; error?: string }
       return { count: 0, error: 'All tokens unfetched' };
     }
 
-    const written = await cacheQuotes(fetched, tokenToSymbol, false); // Redis only, no DB for 60s sync
+    const written = await cacheQuotes(fetched, tokenToSymbol, false); // Redis only, no market_quotes for 60s sync
+
+    // Also update angle_scrip so search results show live prices (fire-and-forget)
+    if (fetched.length > 0) updateAngleScripPrices(fetched).catch(() => {});
+
     if (written > 0) {
       const now = new Date().toISOString();
       await redis.pipeline()
@@ -476,7 +595,10 @@ export async function runMarketSync(): Promise<SyncStatus> {
     const { fetched: equityFetched } = await fetchQuotesInBatches(
       creds.apiKey, accessToken, equityTokens
     );
-    const written = await cacheQuotes(equityFetched, tokenToSymbol, true); // with DB
+    const written = await cacheQuotes(equityFetched, tokenToSymbol, true); // with market_quotes DB
+
+    // Also update angle_scrip (fire-and-forget — non-blocking on the sync result)
+    if (equityFetched.length > 0) updateAngleScripPrices(equityFetched).catch(() => {});
 
     const now = new Date().toISOString();
     await redis.pipeline()

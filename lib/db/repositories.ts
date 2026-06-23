@@ -127,28 +127,116 @@ export async function searchInstrumentsPg(
   opts: { exchange?: string; type?: string; limit?: number } = {},
 ): Promise<SecurityMasterRow[]> {
   const { exchange, type, limit = 20 } = opts;
-  const params: any[] = [`${q.toUpperCase()}%`, limit];
-  let where = 'is_active = TRUE AND (symbol ILIKE $1 OR trading_symbol ILIKE $1)';
+
+  // Derive a normalised exchange filter from exch_seg:
+  //   NSE cash → NSE, NFO → NSE, BSE cash → BSE, BFO → BSE, others kept as-is
+  const exchSegFilter: string[] | null = exchange
+    ? exchange.toUpperCase() === 'NSE' ? ['NSE', 'NFO']
+    : exchange.toUpperCase() === 'BSE' ? ['BSE', 'BFO']
+    : [exchange.toUpperCase()]
+    : null;
+
+  // Map frontend instrument_type to angle_scrip.instrumenttype values
+  const instrFilter: string[] | null = type
+    ? type.toUpperCase() === 'EQ'    ? ['', 'EQ']
+    : type.toUpperCase() === 'INDEX' ? ['AMXIDX', 'INDEX']
+    : type.toUpperCase() === 'FUT'   ? ['FUTSTK', 'FUTIDX', 'FUTCOM', 'FUTCUR']
+    : type.toUpperCase() === 'OPT'   ? ['OPTSTK', 'OPTIDX', 'OPTCUR', 'OPTFUT']
+    : [type.toUpperCase()]
+    : null;
+
+  const prefix = `${q.toUpperCase()}%`;
+  const params: unknown[] = [prefix, limit];
   let n = 3;
-  if (exchange) { where += ` AND exchange = $${n++}`; params.push(exchange); }
-  if (type)     { where += ` AND instrument_type = $${n++}`; params.push(type); }
+
+  const conditions: string[] = [
+    // Match on underlying/clean name (e.g. "HDFC" → HDFCBANK) OR trading symbol
+    '(name ILIKE $1 OR symbol ILIKE $1)'
+  ];
+  if (exchSegFilter) { conditions.push(`exch_seg = ANY($${n++})`); params.push(exchSegFilter); }
+  if (instrFilter)   { conditions.push(`instrumenttype = ANY($${n++})`); params.push(instrFilter); }
+
+  const where = conditions.join(' AND ');
 
   const res = await livePool.query<SecurityMasterRow>(
     `SELECT * FROM (
-       SELECT DISTINCT ON (symbol, exchange, instrument_type, trading_symbol) *
-       FROM security_master WHERE ${where}
-       ORDER BY symbol, exchange, instrument_type, trading_symbol, token
+       SELECT DISTINCT ON (name, exch_seg, instrumenttype)
+         -- PK / identity
+         token,
+         -- exchange: normalise segment → standard NSE/BSE/etc exchange code
+         CASE exch_seg
+           WHEN 'NFO' THEN 'NSE' WHEN 'NCD' THEN 'NSE'
+           WHEN 'BFO' THEN 'BSE' WHEN 'BCD' THEN 'BSE'
+           ELSE exch_seg
+         END AS exchange,
+         -- clean symbol (underlying short name) as "symbol"
+         name AS symbol,
+         -- full trading symbol (e.g. HDFCBANK-EQ, HDFCBANK30JUN26830CE)
+         symbol AS trading_symbol,
+         name,
+         -- map instrumenttype to standard frontend values
+         CASE instrumenttype
+           WHEN ''       THEN 'EQ'
+           WHEN 'AMXIDX' THEN 'INDEX'
+           WHEN 'FUTSTK' THEN 'FUT'  WHEN 'FUTIDX' THEN 'FUT'
+           WHEN 'OPTSTK' THEN 'OPT'  WHEN 'OPTIDX' THEN 'OPT'
+           ELSE instrumenttype
+         END AS instrument_type,
+         exch_seg AS segment,
+         TO_CHAR(expiry, 'YYYY-MM-DD') AS expiry,
+         NULLIF(strike, 0) AS strike,
+         -- option type: extract CE/PE from trading symbol for options
+         CASE
+           WHEN instrumenttype IN ('OPTSTK','OPTIDX','OPTCUR','OPTFUT','OPTIRC')
+             THEN NULLIF(RIGHT(symbol, 2), '')
+           ELSE NULL
+         END AS option_type,
+         -- underlying: same as name for F&O instruments
+         CASE
+           WHEN exch_seg IN ('NFO','BFO','CDS','MCX','NCDEX','NCO')
+             THEN name
+           ELSE NULL
+         END AS underlying,
+         lotsize AS lot_size,
+         tick_size,
+         -- live / EOD price data straight from angle_scrip
+         ltp,
+         open        AS open_price,
+         high        AS high_price,
+         low         AS low_price,
+         close       AS close_price,
+         prev_close,
+         net_change,
+         change_pct,
+         volume,
+         open_interest,
+         price_date,
+         ltp_updated_at AS price_updated_at,
+         -- extra live fields (for enrichWithLivePrices overlay)
+         avg_price,
+         week52_high,
+         week52_low
+       FROM angle_scrip
+       WHERE ${where}
+       ORDER BY name, exch_seg, instrumenttype, token
      ) deduped
      ORDER BY
-       CASE WHEN symbol ILIKE $1 THEN 0 ELSE 1 END,
+       -- Primary: real cash equities first, MF/ETF after, then F&O, then others
        CASE
-         WHEN exchange = 'NSE' AND instrument_type = 'EQ'    THEN 0
-         WHEN exchange = 'BSE' AND instrument_type = 'EQ'    THEN 1
-         WHEN exchange = 'NSE' AND instrument_type = 'INDEX' THEN 2
-         WHEN exchange = 'BSE' AND instrument_type = 'INDEX' THEN 3
-         ELSE 4
+         WHEN exchange IN ('NSE','BSE') AND instrument_type = 'EQ'
+              AND trading_symbol NOT LIKE '%-MF'
+              AND trading_symbol NOT LIKE '%-IL'  THEN 0  -- real equities
+         WHEN exchange IN ('NSE','BSE') AND instrument_type = 'INDEX' THEN 1
+         WHEN instrument_type IN ('FUT','FUTSTK','FUTIDX')            THEN 2
+         WHEN instrument_type IN ('OPT','OPTSTK','OPTIDX')            THEN 3
+         WHEN exchange IN ('NSE','BSE') AND instrument_type = 'EQ'    THEN 4  -- MF/bonds
+         ELSE 5
        END,
-       symbol
+       -- Within same type: NSE before BSE
+       CASE exchange WHEN 'NSE' THEN 0 WHEN 'BSE' THEN 1 ELSE 2 END,
+       -- Prefix match on clean name first
+       CASE WHEN name ILIKE $1 THEN 0 ELSE 1 END,
+       name
      LIMIT $2`,
     params,
   );
