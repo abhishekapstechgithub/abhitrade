@@ -256,14 +256,15 @@ async function tryChainCache(sym: string, exp: string): Promise<OptionChainRespo
 
 // ── Expiries ──────────────────────────────────────────────────────────────────
 
-export async function getOptionExpiries(symbol: string): Promise<{
-  symbol: string; expiries: string[]; nearest: string;
+export async function getOptionExpiries(symbol: string, exchange?: string): Promise<{
+  symbol: string; exchange?: string; expiries: string[]; nearest: string;
 }> {
-  const expiries = await getExpiries(symbol.toUpperCase());
+  const expiries = await getExpiries(symbol.toUpperCase(), exchange);
   return {
-    symbol: symbol.toUpperCase(),
+    symbol:   symbol.toUpperCase(),
+    exchange: exchange?.toUpperCase(),
     expiries,
-    nearest: expiries[0] ?? '',
+    nearest:  expiries[0] ?? '',
   };
 }
 

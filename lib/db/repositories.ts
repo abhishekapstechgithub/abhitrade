@@ -252,12 +252,20 @@ export async function getInstrumentByToken(token: string, exchange: string) {
 }
 
 export async function getExpiryDates(symbol: string, exchange?: string) {
-  const params: any[] = [symbol];
-  let where = 'underlying = $1 AND expiry IS NOT NULL';
-  if (exchange) { where += ' AND exchange = $2'; params.push(exchange); }
+  // NSE: exch_seg IN ('NSE','NFO');  BSE: exch_seg IN ('BSE','BFO');  default: both
+  const exchFilter = exchange
+    ? (exchange.toUpperCase() === 'BSE' ? ['BSE', 'BFO'] : ['NSE', 'NFO'])
+    : ['NSE', 'NFO', 'BSE', 'BFO'];
+
   const res = await livePool.query<{ expiry: string }>(
-    `SELECT DISTINCT expiry FROM security_master WHERE ${where} AND is_active = TRUE ORDER BY expiry`,
-    params,
+    `SELECT DISTINCT TO_CHAR(expiry, 'YYYY-MM-DD') AS expiry
+     FROM   angle_scrip
+     WHERE  name = $1
+       AND  exch_seg = ANY($2::text[])
+       AND  expiry IS NOT NULL
+       AND  expiry >= CURRENT_DATE
+     ORDER  BY expiry`,
+    [symbol.toUpperCase(), exchFilter],
   );
   return res.rows.map(r => r.expiry);
 }
@@ -286,18 +294,23 @@ export async function loadOptionInstruments() {
 }
 
 export async function getOptionExpiries(symbol: string, exchange?: string): Promise<string[]> {
-  const params: unknown[] = [symbol.toUpperCase()];
-  let where = `underlying = $1
-    AND instrument_type IN ('OPTIDX','OPTSTK')
-    AND is_active = TRUE
-    AND expiry IS NOT NULL`;
-  if (exchange) { where += ' AND exchange = $2'; params.push(exchange.toUpperCase()); }
+  // NSE F&O expiries:  exch_seg IN ('NSE','NFO')
+  // BSE F&O expiries:  exch_seg IN ('BSE','BFO')
+  // Default (no exchange specified): both
+  const exchFilter = exchange
+    ? (exchange.toUpperCase() === 'BSE' ? ['BSE', 'BFO'] : ['NSE', 'NFO'])
+    : ['NSE', 'NFO', 'BSE', 'BFO'];
+
   const res = await livePool.query<{ expiry: string }>(
-    `SELECT DISTINCT to_char(expiry,'YYYY-MM-DD') AS expiry
-     FROM   security_master
-     WHERE  ${where}
+    `SELECT DISTINCT TO_CHAR(expiry, 'YYYY-MM-DD') AS expiry
+     FROM   angle_scrip
+     WHERE  name = $1
+       AND  exch_seg = ANY($2::text[])
+       AND  instrumenttype IN ('OPTSTK','OPTIDX','OPTCUR','OPTFUT')
+       AND  expiry IS NOT NULL
+       AND  expiry >= CURRENT_DATE
      ORDER  BY expiry`,
-    params,
+    [symbol.toUpperCase(), exchFilter],
   );
   return res.rows.map(r => r.expiry);
 }

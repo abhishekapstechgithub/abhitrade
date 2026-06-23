@@ -132,25 +132,36 @@ function getLotSize(sym: string): number {
   return sizes[sym] ?? 500;
 }
 
-// ── Postgres Loader ───────────────────────────────────────────────────────────
+// ── Postgres Loader — reads from angle_scrip (authoritative AngelOne scrip master) ──
 
 async function loadFromPostgres(hierarchy: SMHierarchy): Promise<boolean> {
   try {
     const pool = getPool('live');
     const res  = await pool.query<{
       token: string; exchange: string; underlying: string;
-      expiry: string; strike: number; option_type: string;
+      expiry: string; strike: string; option_type: string;
       trading_symbol: string; lot_size: number;
     }>(
-      `SELECT token, exchange, underlying, expiry::text, strike,
-              option_type, trading_symbol, lot_size
-       FROM   security_master
-       WHERE  instrument_type IN ('OPTIDX','OPTSTK')
-         AND  is_active = TRUE
-         AND  underlying IS NOT NULL
-         AND  expiry IS NOT NULL
-         AND  strike IS NOT NULL
-         AND  option_type IN ('CE','PE')
+      // angle_scrip is the AngelOne OpenAPI scrip master — 162k rows, refreshed on upload.
+      // name = underlying clean symbol (e.g. "NIFTY", "HDFCBANK")
+      // symbol = full trading symbol (e.g. "NIFTY26JUN2024500CE")
+      // RIGHT(symbol,2) reliably gives "CE" or "PE" for all option contracts.
+      // exch_seg IN ('NFO','BFO') covers NSE F&O and BSE F&O respectively.
+      `SELECT
+         token,
+         CASE exch_seg WHEN 'NFO' THEN 'NSE' WHEN 'BFO' THEN 'BSE' ELSE exch_seg END AS exchange,
+         name                              AS underlying,
+         TO_CHAR(expiry, 'YYYY-MM-DD')    AS expiry,
+         strike::text                     AS strike,
+         RIGHT(symbol, 2)                 AS option_type,
+         symbol                           AS trading_symbol,
+         lotsize                          AS lot_size
+       FROM   angle_scrip
+       WHERE  instrumenttype IN ('OPTSTK','OPTIDX','OPTCUR','OPTFUT')
+         AND  expiry   IS NOT NULL
+         AND  expiry   >= CURRENT_DATE
+         AND  strike   > 0
+         AND  RIGHT(symbol, 2) IN ('CE','PE')
        ORDER  BY underlying, expiry, strike`,
     );
 
@@ -158,13 +169,13 @@ async function loadFromPostgres(hierarchy: SMHierarchy): Promise<boolean> {
 
     for (const row of res.rows) {
       const sym    = row.underlying.toUpperCase();
-      const expiry = row.expiry.split('T')[0]; // normalize to YYYY-MM-DD
+      const expiry = row.expiry.split('T')[0]; // ensure YYYY-MM-DD
       const strike = Number(row.strike);
       const token  = Number(row.token);
 
-      if (!hierarchy.has(sym))         hierarchy.set(sym, new Map());
+      if (!hierarchy.has(sym))  hierarchy.set(sym, new Map());
       const exMap = hierarchy.get(sym)!;
-      if (!exMap.has(expiry))           exMap.set(expiry, new Map());
+      if (!exMap.has(expiry))   exMap.set(expiry, new Map());
       const stMap = exMap.get(expiry)!;
       if (!stMap.has(strike)) {
         stMap.set(strike, {
@@ -188,9 +199,10 @@ async function loadFromPostgres(hierarchy: SMHierarchy): Promise<boolean> {
       }
     }
 
+    console.info(`[OptionChain][SM] Loaded ${res.rows.length} option contracts from angle_scrip`);
     return true;
   } catch (err) {
-    console.error('[OptionChain][SM] Postgres load failed:', (err as Error).message);
+    console.error('[OptionChain][SM] angle_scrip load failed:', (err as Error).message);
     return false;
   }
 }
@@ -228,9 +240,41 @@ export async function getHierarchy(): Promise<SMHierarchy> {
   return getCache().hierarchy;
 }
 
-export async function getExpiries(symbol: string): Promise<string[]> {
-  const h   = await getHierarchy();
+export async function getExpiries(symbol: string, exchange?: string): Promise<string[]> {
   const sym = symbol.toUpperCase();
+
+  // Always query the DB directly so expiry dates are never computed/generated.
+  // angle_scrip is the source of truth — refreshed on every scrip master upload.
+  try {
+    const pool = getPool('live');
+
+    // Determine which segments to include based on exchange hint
+    // NSE = NSE cash + NFO (F&O);  BSE = BSE cash + BFO (F&O)
+    const exchFilter = exchange
+      ? (exchange.toUpperCase() === 'BSE' ? ['BSE', 'BFO'] : ['NSE', 'NFO'])
+      : ['NSE', 'NFO', 'BSE', 'BFO'];   // all if not specified
+
+    const res = await pool.query<{ expiry: string }>(
+      `SELECT DISTINCT TO_CHAR(expiry, 'YYYY-MM-DD') AS expiry
+       FROM   angle_scrip
+       WHERE  name = $1
+         AND  exch_seg = ANY($2::text[])
+         AND  instrumenttype IN ('OPTSTK','OPTIDX','OPTCUR','OPTFUT')
+         AND  expiry IS NOT NULL
+         AND  expiry >= CURRENT_DATE
+       ORDER  BY expiry`,
+      [sym, exchFilter],
+    );
+
+    if (res.rows.length > 0) {
+      return res.rows.map(r => r.expiry);
+    }
+  } catch (err) {
+    console.warn('[OptionChain][SM] getExpiries DB failed, falling back to cache:', (err as Error).message);
+  }
+
+  // Fallback: in-memory hierarchy (loaded from angle_scrip, refreshed hourly)
+  const h = await getHierarchy();
   if (!h.has(sym)) return [];
   return Array.from(h.get(sym)!.keys()).sort();
 }
