@@ -1,58 +1,37 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import '../../config/constants.dart';
 import '../../theme/app_theme.dart';
 import '../../providers/app_provider.dart';
 import '../../widgets/widgets.dart';
 import '../../models/models.dart';
 
-/// Maps an Angel One-style token to Religare's token + mktsegid.
-/// Falls back to the raw token with NSE equity segment.
-_ReligareToken _mapToken(String token, String exchange) {
-  // Special index overrides
-  const indexMap = {
-    '99926000': _ReligareToken('26000', 1),
-    '99926009': _ReligareToken('26009', 1),
-    '99926037': _ReligareToken('26037', 1),
-    '99919000': _ReligareToken('19000', 3),
-  };
-  if (indexMap.containsKey(token)) return indexMap[token]!;
-
-  final ex = exchange.toUpperCase();
-  final seg = ex == 'BSE' ? 3 : 1;
-  return _ReligareToken(token, seg);
-}
-
-class _ReligareToken {
-  final String token;
-  final int mktsegid;
-  const _ReligareToken(this.token, this.mktsegid);
-}
-
-String _buildChartUrl(String token, String exchange) {
-  final rt = _mapToken(token, exchange);
-  return 'https://leap.religareonline.com/TV/index.html'
-      '?ver=v1'
-      '&mode=advance'
-      '&pid=2'
-      '&mktsegid=${rt.mktsegid}'
-      '&tkn=${rt.token}'
-      '&period=1'
-      '&interval=MIN'
-      '&style=line'
-      '&zoom=y'
-      '&xaxis=y'
-      '&yaxis=y'
-      '&hdr=y'
-      '&title=n'
-      '&headsup=y'
-      '&buysell=y'
-      '&lookup=y'
-      '&theme=d'
-      '&span='
-      '&continuous='
-      '&group=g1'
-      '&apikey=0HVTVTkNzEg7Dwjd80T0bXbO8t8FThd';
+String _buildChartUrl(String symbol, String exchange, bool isDark) {
+  final sym = symbol.toUpperCase();
+  final themeStr = isDark ? 'd' : 'l';
+  // BSE indices: open chart with no token + lookup enabled; JS will auto-search
+  if (kBseIndexSearch.containsKey(sym)) {
+    return '${AppConstants.religareChartBase}'
+        '?ver=v1&mode=advance&pid=2'
+        '&mktsegid=3'
+        '&period=1&interval=MIN&style=line&zoom=y'
+        '&xaxis=y&yaxis=y&hdr=y&title=n'
+        '&headsup=y&buysell=n&lookup=y&theme=$themeStr'
+        '&span=&continuous=&group=g1'
+        '&apikey=${AppConstants.religareApiKey}';
+  }
+  final mktsegid = mktsegIdForExchange(exchange);
+  final token = kNseTokens[sym] ?? sym;
+  return '${AppConstants.religareChartBase}'
+      '?ver=v1&mode=advance&pid=2'
+      '&mktsegid=$mktsegid&tkn=$token'
+      '&period=1&interval=MIN&style=line&zoom=y'
+      '&xaxis=y&yaxis=y&hdr=y&title=n'
+      '&headsup=y&buysell=n&lookup=y&theme=$themeStr'
+      '&span=&continuous=&group=g1'
+      '&apikey=${AppConstants.religareApiKey}';
 }
 
 class ChartScreen extends StatefulWidget {
@@ -76,31 +55,98 @@ class ChartScreen extends StatefulWidget {
 }
 
 class _ChartScreenState extends State<ChartScreen> {
-  late final WebViewController _controller;
+  late WebViewController _controller;
   bool _loading = true;
   bool _error = false;
+  String? _autoSearch; // non-null → inject JS search after page load
+  bool _initialized = false;
 
   @override
   void initState() {
     super.initState();
-    final url = _buildChartUrl(widget.token, widget.exchange);
-
-    _controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(const Color(0xFF050B18))
-      ..setNavigationDelegate(NavigationDelegate(
-        onPageStarted: (_) => setState(() {
-          _loading = true;
-          _error = false;
-        }),
-        onPageFinished: (_) => setState(() => _loading = false),
-        onWebResourceError: (_) => setState(() {
-          _loading = false;
-          _error = true;
-        }),
-      ))
-      ..loadRequest(Uri.parse(url));
+    _autoSearch = kBseIndexSearch[widget.symbol.toUpperCase()];
   }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_initialized) {
+      _initialized = true;
+      final isDark = Theme.of(context).brightness == Brightness.dark;
+      final url = _buildChartUrl(widget.symbol, widget.exchange, isDark);
+
+      _controller = WebViewController()
+        ..setJavaScriptMode(JavaScriptMode.unrestricted)
+        ..setBackgroundColor(Colors.transparent)
+        ..setNavigationDelegate(NavigationDelegate(
+          onPageStarted: (_) => setState(() {
+            _loading = true;
+            _error = false;
+          }),
+          onPageFinished: (_) {
+            setState(() => _loading = false);
+            if (_autoSearch != null) _injectSearch(_autoSearch!);
+          },
+          onWebResourceError: (error) {
+            if (error.isForMainFrame == true) {
+              setState(() { _loading = false; _error = true; });
+            }
+          },
+        ))
+        ..loadRequest(Uri.parse(url));
+    }
+  }
+
+  void _injectSearch(String query) {
+    Future.delayed(const Duration(milliseconds: 2500), () {
+      if (!mounted) return;
+      _controller.runJavaScript('''
+        (function() {
+          var q = ${_escapeJs(query)};
+          // Try TradingView widget setSymbol API
+          function tryApi() {
+            for (var k in window) {
+              try {
+                var o = window[k];
+                if (!o || typeof o !== 'object') continue;
+                if (typeof o.setSymbol === 'function') { o.setSymbol(q, '1', function(){}); return true; }
+                if (o.chart && typeof o.chart === 'function' && typeof o.chart().setSymbol === 'function') {
+                  o.chart().setSymbol(q, '1', function(){}); return true;
+                }
+              } catch(e) {}
+            }
+            return false;
+          }
+          // Fallback: click the lookup/search button, then type the query
+          function tryUI() {
+            var btn = document.querySelector('[class*="lookup"]')
+                   || document.querySelector('[class*="symbol-search"]')
+                   || document.querySelector('[class*="searchMode"]')
+                   || document.querySelector('[class*="header"] [class*="symbol"]')
+                   || document.querySelector('button[title]');
+            if (!btn) return;
+            btn.click();
+            setTimeout(function() {
+              var inp = document.querySelector('input[class*="search"]')
+                     || document.querySelector('input[placeholder]')
+                     || document.activeElement;
+              if (inp && inp.tagName === 'INPUT') {
+                inp.value = '';
+                inp.focus();
+                var nativeInput = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+                nativeInput && nativeInput.set && nativeInput.set.call(inp, q);
+                inp.dispatchEvent(new Event('input', {bubbles:true}));
+              }
+            }, 600);
+          }
+          if (!tryApi()) tryUI();
+        })();
+      ''');
+    });
+  }
+
+  static String _escapeJs(String s) => '"${s.replaceAll('"', '\\"')}"';
+
 
   @override
   Widget build(BuildContext context) {
@@ -109,7 +155,7 @@ class _ChartScreenState extends State<ChartScreen> {
     final item = widget.watchlistItem;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF050B18),
+      backgroundColor: ext.bg,
       appBar: AppBar(
         backgroundColor: ext.surface,
         surfaceTintColor: Colors.transparent,
@@ -127,11 +173,17 @@ class _ChartScreenState extends State<ChartScreen> {
                 children: [
                   Text(
                     widget.symbol,
-                    style: TextStyle(
-                      color: ext.textPrimary,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                    ),
+                    style: context.isDark
+                        ? TextStyle(
+                            color: ext.textPrimary,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                          )
+                        : GoogleFonts.lora(
+                            color: ext.textPrimary,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                          ),
                   ),
                   if (widget.name.isNotEmpty &&
                       widget.name != widget.symbol)
@@ -243,7 +295,8 @@ class _ChartScreenState extends State<ChartScreen> {
             child: _error
                 ? _ErrorView(
                     onRetry: () {
-                      final url = _buildChartUrl(widget.token, widget.exchange);
+                      final isDark = Theme.of(context).brightness == Brightness.dark;
+                      final url = _buildChartUrl(widget.symbol, widget.exchange, isDark);
                       _controller.loadRequest(Uri.parse(url));
                     },
                   )
@@ -252,7 +305,7 @@ class _ChartScreenState extends State<ChartScreen> {
           // Loading overlay
           if (_loading)
             Container(
-              color: const Color(0xFF050B18),
+              color: ext.bg,
               child: const Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -304,9 +357,9 @@ class _ChartScreenState extends State<ChartScreen> {
       ctx,
       orderItem,
       trading.isPaper,
-      (side, qty, price, mode) {
+      (side, qty, price, mode) async {
         if (trading.isPaper) {
-          final err = trading.placePaperOrder(
+          final err = await trading.placePaperOrder(
             symbol: orderItem.symbol,
             side: side,
             quantity: qty,
@@ -315,7 +368,7 @@ class _ChartScreenState extends State<ChartScreen> {
           if (ctx.mounted) {
             ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
               content: Text(err.isEmpty
-                  ? 'Paper order placed: ${side.name.toUpperCase()} ${orderItem.symbol} x$qty @ ₹${price.toStringAsFixed(2)}'
+                  ? 'Order placed: ${side.name.toUpperCase()} ${orderItem.symbol} x$qty @ ₹${price.toStringAsFixed(2)}'
                   : 'Error: $err'),
               backgroundColor: err.isEmpty ? AppColors.green : AppColors.red,
             ));
@@ -434,11 +487,17 @@ class _ErrorView extends StatelessWidget {
           const SizedBox(height: 16),
           Text(
             'Chart failed to load',
-            style: TextStyle(
-              color: ext.textSecondary,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-            ),
+            style: context.isDark
+                ? TextStyle(
+                    color: ext.textSecondary,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  )
+                : GoogleFonts.lora(
+                    color: ext.textSecondary,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
           ),
           const SizedBox(height: 8),
           Text(

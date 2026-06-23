@@ -1,4 +1,4 @@
-# Flutter
+# Flutter/Dart
 .dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
@@ -6,10 +6,21 @@
 .pub-cache/
 .pub/
 build/
-*.iml
-*.ipr
-*.iws
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+
+# Android
+android/
+ios/
+linux/
+macos/
+web/
+windows/
+
+# IDE
 .idea/
 .vscode/
-android/app/google-services.json
-ios/Runner/GoogleService-Info.plist
+*.iml

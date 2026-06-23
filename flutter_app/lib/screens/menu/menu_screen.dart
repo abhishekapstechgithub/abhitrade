@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../../providers/app_provider.dart';
 import '../../theme/app_theme.dart';
@@ -20,10 +21,15 @@ class MenuScreen extends StatelessWidget {
         backgroundColor: ext.surface,
         surfaceTintColor: Colors.transparent,
         title: Text('Menu',
-            style: TextStyle(
-                color: ext.textPrimary,
-                fontSize: 18,
-                fontWeight: FontWeight.w700)),
+            style: context.isDark
+                ? TextStyle(
+                    color: ext.textPrimary,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700)
+                : GoogleFonts.lora(
+                    color: ext.textPrimary,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700)),
       ),
       body: ListView(
         children: [
@@ -69,55 +75,57 @@ class MenuScreen extends StatelessWidget {
                       Text(
                         auth.user?.email ?? '',
                         style: TextStyle(
-                            color: Colors.white.withOpacity(0.7), fontSize: 13),
+                            color: Colors.white.withValues(alpha: 0.7), fontSize: 13),
                       ),
                     ],
                   ),
                 ),
-                Icon(Icons.chevron_right, color: Colors.white.withOpacity(0.5)),
+                Icon(Icons.chevron_right, color: Colors.white.withValues(alpha: 0.5)),
               ],
             ),
           ),
 
-          // ── Trading mode toggle ─────────────────────────────────────────────
+          // ── Trading Wallet ────────────────────────────────────────────────
           _Section(
-            title: 'Trading Mode',
+            title: 'Trading Wallet',
             children: [
-              _ToggleRow(
-                icon: Icons.science_outlined,
-                iconColor: AppColors.amber,
-                title: 'Paper Trading',
-                subtitle: trading.isPaper
-                    ? 'Balance: ${fmtRupee(trading.paperBalance)}'
-                    : 'Practice without real money',
-                value: trading.isPaper,
-                onChanged: (_) async {
-                  trading.toggle();
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                    content: Text(trading.isPaper
-                        ? '🧪 Switched to paper trading'
-                        : '📈 Switched to live trading'),
-                    duration: const Duration(seconds: 2),
-                  ));
-                },
-              ),
-              if (trading.isPaper)
-                ListTile(
+              Material(
+                color: Colors.transparent,
+                child: ListTile(
                   leading: Container(
                     width: 36,
                     height: 36,
                     decoration: BoxDecoration(
-                      color: AppColors.redDim,
+                      color: AppColors.blue.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.account_balance_wallet_outlined, color: AppColors.blue, size: 20),
+                  ),
+                  title: Text('Trading Wallet',
+                      style: TextStyle(color: ext.textPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
+                  subtitle: Text('Balance: ${fmtRupee(trading.paperBalance)}',
+                      style: TextStyle(color: ext.textMuted, fontSize: 12)),
+                ),
+              ),
+              Material(
+                color: Colors.transparent,
+                child: ListTile(
+                  leading: Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: AppColors.red.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: const Icon(Icons.restart_alt, color: AppColors.red, size: 20),
                   ),
-                  title: Text('Reset Paper Balance',
+                  title: Text('Reset Wallet Balance',
                       style: TextStyle(color: ext.textPrimary, fontSize: 14)),
-                  subtitle: Text('Reset to ₹10,00,000',
+                  subtitle: Text('Reset balance to ₹10,00,000',
                       style: TextStyle(color: ext.textMuted, fontSize: 12)),
                   onTap: () => _confirmReset(context, trading),
                 ),
+              ),
             ],
           ),
 
@@ -197,10 +205,13 @@ class MenuScreen extends StatelessWidget {
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
             side: BorderSide(color: ctx.appColors.border)),
-        title: Text('Reset Paper Balance',
-            style: TextStyle(
-                color: ctx.appColors.textPrimary, fontWeight: FontWeight.w700)),
-        content: Text('Reset paper balance to ₹10,00,000 and clear all paper orders?',
+        title: Text('Reset Wallet Balance',
+            style: ctx.isDark
+                ? TextStyle(
+                    color: ctx.appColors.textPrimary, fontWeight: FontWeight.w700)
+                : GoogleFonts.lora(
+                    color: ctx.appColors.textPrimary, fontWeight: FontWeight.w700)),
+        content: Text('Reset wallet balance to ₹10,00,000 and clear all simulated orders?',
             style: TextStyle(color: ctx.appColors.textSecondary)),
         actions: [
           TextButton(
@@ -208,7 +219,7 @@ class MenuScreen extends StatelessWidget {
             child: Text('Cancel', style: TextStyle(color: ctx.appColors.textSecondary)),
           ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.amber),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.blue),
             onPressed: () {
               trading.resetPaper();
               Navigator.pop(ctx);
@@ -229,8 +240,11 @@ class MenuScreen extends StatelessWidget {
             borderRadius: BorderRadius.circular(16),
             side: BorderSide(color: ctx.appColors.border)),
         title: Text('Sign Out',
-            style: TextStyle(
-                color: ctx.appColors.textPrimary, fontWeight: FontWeight.w700)),
+            style: ctx.isDark
+                ? TextStyle(
+                    color: ctx.appColors.textPrimary, fontWeight: FontWeight.w700)
+                : GoogleFonts.lora(
+                    color: ctx.appColors.textPrimary, fontWeight: FontWeight.w700)),
         content: Text('Are you sure you want to sign out?',
             style: TextStyle(color: ctx.appColors.textSecondary)),
         actions: [
@@ -274,11 +288,12 @@ class _Section extends StatelessWidget {
                   letterSpacing: 0.8)),
         ),
         Container(
-          margin: const EdgeInsets.symmetric(horizontal: 16),
           decoration: BoxDecoration(
-            color: ext.card,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: ext.border),
+            color: ext.surface,
+            border: Border(
+              top: BorderSide(color: ext.border, width: 0.5),
+              bottom: BorderSide(color: ext.border, width: 0.5),
+            ),
           ),
           child: Column(
             children: children.asMap().entries.map((e) {
@@ -286,7 +301,7 @@ class _Section extends StatelessWidget {
               return Column(
                 children: [
                   e.value,
-                  if (!isLast) Divider(indent: 56, endIndent: 0, color: ext.border, height: 1),
+                  if (!isLast) Divider(indent: 56, endIndent: 0, color: ext.border, height: 0.5),
                 ],
               );
             }).toList(),
@@ -315,23 +330,26 @@ class _NavRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ext = context.appColors;
-    return ListTile(
-      leading: Container(
-        width: 36,
-        height: 36,
-        decoration: BoxDecoration(
-          color: iconColor.withOpacity(0.15),
-          borderRadius: BorderRadius.circular(10),
+    return Material(
+      color: Colors.transparent,
+      child: ListTile(
+        leading: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: iconColor.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, color: iconColor, size: 20),
         ),
-        child: Icon(icon, color: iconColor, size: 20),
+        title: Text(title,
+            style: TextStyle(color: ext.textPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
+        subtitle: subtitle != null
+            ? Text(subtitle!, style: TextStyle(color: ext.textMuted, fontSize: 12))
+            : null,
+        trailing: Icon(Icons.chevron_right, size: 18, color: ext.textMuted),
+        onTap: onTap ?? () {},
       ),
-      title: Text(title,
-          style: TextStyle(color: ext.textPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
-      subtitle: subtitle != null
-          ? Text(subtitle!, style: TextStyle(color: ext.textMuted, fontSize: 12))
-          : null,
-      trailing: Icon(Icons.chevron_right, size: 18, color: ext.textMuted),
-      onTap: onTap ?? () {},
     );
   }
 }
@@ -356,22 +374,25 @@ class _ToggleRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ext = context.appColors;
-    return ListTile(
-      leading: Container(
-        width: 36,
-        height: 36,
-        decoration: BoxDecoration(
-          color: iconColor.withOpacity(0.15),
-          borderRadius: BorderRadius.circular(10),
+    return Material(
+      color: Colors.transparent,
+      child: ListTile(
+        leading: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: iconColor.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, color: iconColor, size: 20),
         ),
-        child: Icon(icon, color: iconColor, size: 20),
+        title: Text(title,
+            style: TextStyle(color: ext.textPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
+        subtitle: subtitle != null
+            ? Text(subtitle!, style: TextStyle(color: ext.textMuted, fontSize: 12))
+            : null,
+        trailing: Switch(value: value, onChanged: onChanged),
       ),
-      title: Text(title,
-          style: TextStyle(color: ext.textPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
-      subtitle: subtitle != null
-          ? Text(subtitle!, style: TextStyle(color: ext.textMuted, fontSize: 12))
-          : null,
-      trailing: Switch(value: value, onChanged: onChanged),
     );
   }
 }

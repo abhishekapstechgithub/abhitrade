@@ -224,3 +224,35 @@ export function getGainersLosers(
     'POST', apiKey, accessToken, { datatype }
   );
 }
+
+// ── Option Greeks ─────────────────────────────────────────────────────────────
+// Provides Delta, Gamma, Theta, Vega, IV and trade volume for all strikes
+// of a given underlying + expiry pair.
+//
+// name       : underlying symbol, e.g. "NIFTY", "TCS"
+// expirydate : "DDMMMYYYY", e.g. "26JUN2025"   (NOT YYYY-MM-DD)
+export interface AngelGreekRecord {
+  name:              string;
+  expiry:            string;   // echoed back as "DDMMMYYYY"
+  strikePrice:       string;   // e.g. "24500.000000"
+  optionType:        'CE' | 'PE';
+  delta:             string;
+  gamma:             string;
+  theta:             string;
+  vega:              string;
+  impliedVolatility: string;   // percentage, e.g. "16.33"
+  tradeVolume:       string;
+}
+
+export function getOptionGreeks(
+  apiKey: string,
+  accessToken: string,
+  name: string,
+  expirydate: string,          // "DDMMMYYYY"
+) {
+  return callApi<AngelGreekRecord[]>(
+    '/rest/secure/angelbroking/marketData/v1/optionGreek',
+    'POST', apiKey, accessToken,
+    { name, expirydate },
+  );
+}

@@ -5,7 +5,7 @@ import 'package:provider/provider.dart';
 import '../../providers/app_provider.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/widgets.dart';
-import '../../config/constants.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class PortfolioScreen extends StatefulWidget {
   const PortfolioScreen({super.key});
@@ -41,10 +41,11 @@ class _PortfolioScreenState extends State<PortfolioScreen>
     final portfolio = context.watch<PortfolioProvider>();
     final mode      = context.watch<TradingModeProvider>();
 
-    final totalVal = mode.isPaper ? mode.paperBalance : portfolio.totalCurrent;
-    final totalPnl = mode.isPaper ? 0.0 : portfolio.totalPnl;
-    final pnlPct   = mode.isPaper ? 0.0 : portfolio.totalPnlPct;
-    final todayPnl = mode.isPaper ? 0.0 : portfolio.todayPnl;
+    final hasHoldings = portfolio.holdings.isNotEmpty;
+    final totalVal = hasHoldings ? portfolio.totalCurrent : mode.paperBalance;
+    final totalPnl = hasHoldings ? portfolio.totalPnl : 0.0;
+    final pnlPct   = hasHoldings ? portfolio.totalPnlPct : 0.0;
+    final todayPnl = hasHoldings ? portfolio.todayPnl : 0.0;
     final isPos    = totalPnl >= 0;
     final color    = isPos ? AppColors.green : AppColors.red;
     final fmt      = NumberFormat('#,##,##0.00');
@@ -55,10 +56,15 @@ class _PortfolioScreenState extends State<PortfolioScreen>
         backgroundColor: ext.surface,
         surfaceTintColor: Colors.transparent,
         title: Text('Portfolio',
-            style: TextStyle(
-                color: ext.textPrimary,
-                fontSize: 18,
-                fontWeight: FontWeight.w700)),
+            style: context.isDark
+                ? TextStyle(
+                    color: ext.textPrimary,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700)
+                : GoogleFonts.lora(
+                    color: ext.textPrimary,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700)),
         actions: [
           IconButton(
             icon: Icon(Icons.visibility_outlined, color: ext.textSecondary),
@@ -77,7 +83,6 @@ class _PortfolioScreenState extends State<PortfolioScreen>
       ),
       body: Column(
         children: [
-          if (mode.isPaper) PaperModeBanner(balance: mode.paperBalance),
           // Summary card
           Container(
             padding: const EdgeInsets.all(16),
@@ -86,44 +91,50 @@ class _PortfolioScreenState extends State<PortfolioScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('Total Portfolio Value',
-                    style: TextStyle(color: ext.textSecondary, fontSize: 13)),
+                    style: context.isDark
+                        ? TextStyle(color: ext.textSecondary, fontSize: 13)
+                        : GoogleFonts.lora(color: ext.textSecondary, fontSize: 13)),
                 const SizedBox(height: 4),
                 Text('₹${fmt.format(totalVal)}',
-                    style: TextStyle(
-                        color: ext.textPrimary,
-                        fontSize: 26,
-                        fontWeight: FontWeight.w800)),
+                    style: context.isDark
+                        ? TextStyle(
+                            color: ext.textPrimary,
+                            fontSize: 26,
+                            fontWeight: FontWeight.w800)
+                        : GoogleFonts.lora(
+                            color: ext.textPrimary,
+                            fontSize: 26,
+                            fontWeight: FontWeight.w800)),
                 const SizedBox(height: 6),
-                if (!mode.isPaper)
-                  Row(
-                    children: [
-                      _Pill(
-                        label: 'Total: ${fmtChange(totalPnl)} (${fmtChange(pnlPct)}%)',
-                        color: color,
-                        dimColor: isPos
-                            ? (context.isDark ? AppColors.greenDim : AppColors.greenDimLight)
-                            : (context.isDark ? AppColors.redDim : AppColors.redDimLight),
-                      ),
-                      const SizedBox(width: 8),
-                      _Pill(
-                        label: "Today: ${fmtChange(todayPnl)}",
-                        color: todayPnl >= 0 ? AppColors.green : AppColors.red,
-                        dimColor: todayPnl >= 0
-                            ? (context.isDark ? AppColors.greenDim : AppColors.greenDimLight)
-                            : (context.isDark ? AppColors.redDim : AppColors.redDimLight),
-                      ),
-                    ],
-                  ),
+                Row(
+                  children: [
+                    _Pill(
+                      label: 'Total: ${fmtChange(totalPnl)} (${fmtChange(pnlPct)}%)',
+                      color: color,
+                      dimColor: isPos
+                          ? (context.isDark ? AppColors.greenDim : AppColors.greenDimLight)
+                          : (context.isDark ? AppColors.redDim : AppColors.redDimLight),
+                    ),
+                    const SizedBox(width: 8),
+                    _Pill(
+                      label: "Today: ${fmtChange(todayPnl)}",
+                      color: todayPnl >= 0 ? AppColors.green : AppColors.red,
+                      dimColor: todayPnl >= 0
+                          ? (context.isDark ? AppColors.greenDim : AppColors.greenDimLight)
+                          : (context.isDark ? AppColors.redDim : AppColors.redDimLight),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 12),
                 Row(
                   children: [
                     _StatBox(
                         label: 'Invested',
-                        value: '₹${fmtCompact(mode.isPaper ? AppConstants.paperBalance : portfolio.totalInvested)}'),
+                        value: '₹${fmtCompact(hasHoldings ? portfolio.totalInvested : mode.paperBalance)}'),
                     const SizedBox(width: 12),
                     _StatBox(
                         label: "Today's P&L",
-                        value: mode.isPaper ? '–' : fmtChange(todayPnl),
+                        value: fmtChange(todayPnl),
                         valueColor: todayPnl >= 0 ? AppColors.green : AppColors.red),
                     const SizedBox(width: 12),
                     _StatBox(
@@ -141,7 +152,9 @@ class _PortfolioScreenState extends State<PortfolioScreen>
               children: [
                 // Holdings tab
                 portfolio.loading
-                    ? _HoldingsShimmer()
+                    ? const Center(
+                        child: CircularProgressIndicator(
+                            color: AppColors.blue, strokeWidth: 2))
                     : portfolio.holdings.isEmpty
                         ? _EmptyPortfolio()
                         : ListView.separated(
@@ -205,7 +218,12 @@ class _StatBox extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(label, style: TextStyle(color: ext.textMuted, fontSize: 11)),
+            Text(
+              label,
+              style: context.isDark
+                  ? TextStyle(color: ext.textMuted, fontSize: 11)
+                  : GoogleFonts.lora(color: ext.textMuted, fontSize: 11),
+            ),
             const SizedBox(height: 4),
             Text(value,
                 style: TextStyle(
@@ -358,95 +376,21 @@ class _EmptyPortfolio extends StatelessWidget {
   Widget build(BuildContext context) {
     final ext = context.appColors;
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 72,
-              height: 72,
-              decoration: BoxDecoration(
-                color: AppColors.blueDim.withOpacity(0.2),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.account_balance_wallet_outlined,
-                  size: 36, color: AppColors.blue),
-            ),
-            const SizedBox(height: 20),
-            Text('No holdings yet',
-                style: TextStyle(
-                    color: ext.textPrimary,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700)),
-            const SizedBox(height: 8),
-            Text('Buy stocks to start building your portfolio',
-                style: TextStyle(color: ext.textMuted, fontSize: 13),
-                textAlign: TextAlign.center),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: () {},
-              icon: const Icon(Icons.search, size: 16),
-              label: const Text('Discover Stocks'),
-            ),
-          ],
-        ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.account_balance_wallet_outlined, size: 52, color: ext.textMuted),
+          const SizedBox(height: 16),
+          Text('No holdings yet',
+              style: TextStyle(
+                  color: ext.textSecondary,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          Text('Buy stocks to start building your portfolio',
+              style: TextStyle(color: ext.textMuted, fontSize: 13)),
+        ],
       ),
     );
   }
-}
-
-class _HoldingsShimmer extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final ext = context.appColors;
-    return ListView.separated(
-      itemCount: 6,
-      separatorBuilder: (_, __) =>
-          Divider(indent: 16, endIndent: 16, color: ext.border, height: 1),
-      itemBuilder: (_, __) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        child: Row(
-          children: [
-            _Bone(w: 38, h: 38, r: 10, ext: ext),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _Bone(w: 80, h: 12, r: 4, ext: ext),
-                  const SizedBox(height: 6),
-                  _Bone(w: 120, h: 10, r: 4, ext: ext),
-                ],
-              ),
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                _Bone(w: 70, h: 12, r: 4, ext: ext),
-                const SizedBox(height: 6),
-                _Bone(w: 50, h: 10, r: 4, ext: ext),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _Bone extends StatelessWidget {
-  final double w, h, r;
-  final AppThemeExtension ext;
-  const _Bone({required this.w, required this.h, required this.r, required this.ext});
-
-  @override
-  Widget build(BuildContext context) => Container(
-        width: w,
-        height: h,
-        decoration: BoxDecoration(
-          color: ext.border,
-          borderRadius: BorderRadius.circular(r),
-        ),
-      );
 }

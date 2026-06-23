@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 // ─── Dark palette ────────────────────────────────────────────────────────────
 class DarkColors {
@@ -10,34 +11,34 @@ class DarkColors {
   static const border   = Color(0xFF1A3A5C);
   static const primary  = Color(0xFFE8F0FF);
   static const secondary= Color(0xFF8BAAC8);
-  static const muted    = Color(0xFF4A6480);
+  static const muted    = Color(0xFF708CA6);
 }
 
 // ─── Light palette ───────────────────────────────────────────────────────────
 class LightColors {
   LightColors._();
-  static const bg       = Color(0xFFF0F4FA);
-  static const surface  = Color(0xFFFFFFFF);
-  static const card     = Color(0xFFFFFFFF);
-  static const border   = Color(0xFFD1DCF0);
-  static const primary  = Color(0xFF0D1B2E);
-  static const secondary= Color(0xFF4A6480);
-  static const muted    = Color(0xFF8BAAC8);
+  static const bg       = Color(0xFFF4F1EA);
+  static const surface  = Color(0xFFF4F1EA);
+  static const card     = Color(0xFFFBFBF9);
+  static const border   = Color(0xFFDCD8CF);
+  static const primary  = Color(0xFF131924);
+  static const secondary= Color(0xFF4A5568);
+  static const muted    = Color(0xFF718096);
 }
 
 // ─── Semantic colours (same in both themes) ──────────────────────────────────
 class AppColors {
   AppColors._();
-  static const green    = Color(0xFF16C964);
+  static const green    = Color(0xFF168A43);
   static const greenDim = Color(0xFF0A3D20);
   static const greenDimLight = Color(0xFFDCFCE7);
-  static const red      = Color(0xFFF0616D);
+  static const red      = Color(0xFFC62828);
   static const redDim   = Color(0xFF3D0A12);
   static const redDimLight   = Color(0xFFFFE4E6);
   static const blue     = Color(0xFF3B82F6);
   static const blueDim  = Color(0xFF1E3A8A);
   static const blueDimLight  = Color(0xFFDBEAFE);
-  static const teal     = Color(0xFF22D3EE);
+  static const teal     = Color(0xFF3B82F6);
   static const amber    = Color(0xFFF59E0B);
   static const amberDim = Color(0xFF78350F);
   static const amberDimLight = Color(0xFFFEF3C7);
@@ -85,8 +86,41 @@ class AppTheme {
     required Color textSecondary,
     required Color textMuted,
     required SystemUiOverlayStyle overlayStyle,
-  }) =>
-      ThemeData(
+  }) {
+    final baseTextTheme = TextTheme(
+      displayLarge:  TextStyle(color: textPrimary, fontWeight: FontWeight.w800),
+      displayMedium: TextStyle(color: textPrimary, fontWeight: FontWeight.w700),
+      headlineLarge: TextStyle(color: textPrimary, fontWeight: FontWeight.w700, fontSize: 26),
+      headlineMedium:TextStyle(color: textPrimary, fontWeight: FontWeight.w600, fontSize: 20),
+      headlineSmall: TextStyle(color: textPrimary, fontWeight: FontWeight.w600, fontSize: 18),
+      titleLarge:    TextStyle(color: textPrimary, fontWeight: FontWeight.w600, fontSize: 16),
+      titleMedium:   TextStyle(color: textPrimary, fontWeight: FontWeight.w500, fontSize: 14),
+      titleSmall:    TextStyle(color: textSecondary, fontWeight: FontWeight.w500, fontSize: 13),
+      bodyLarge:     TextStyle(color: textPrimary, fontSize: 15),
+      bodyMedium:    TextStyle(color: textSecondary, fontSize: 14),
+      bodySmall:     TextStyle(color: textMuted, fontSize: 12),
+      labelLarge:    TextStyle(color: textPrimary, fontWeight: FontWeight.w600, fontSize: 13),
+      labelMedium:   TextStyle(color: textSecondary, fontSize: 12),
+      labelSmall:    TextStyle(color: textMuted, fontSize: 11),
+    );
+
+    final TextTheme textTheme;
+    if (brightness == Brightness.dark) {
+      textTheme = GoogleFonts.interTextTheme(baseTextTheme);
+    } else {
+      final loraTheme = GoogleFonts.loraTextTheme(baseTextTheme);
+      final interTheme = GoogleFonts.interTextTheme(baseTextTheme);
+      textTheme = loraTheme.copyWith(
+        bodyLarge: interTheme.bodyLarge,
+        bodyMedium: interTheme.bodyMedium,
+        bodySmall: interTheme.bodySmall,
+        labelLarge: interTheme.labelLarge,
+        labelMedium: interTheme.labelMedium,
+        labelSmall: interTheme.labelSmall,
+      );
+    }
+
+    return ThemeData(
         useMaterial3: true,
         brightness: brightness,
         scaffoldBackgroundColor: bg,
@@ -110,11 +144,17 @@ class AppTheme {
           systemOverlayStyle: overlayStyle.copyWith(
             statusBarColor: Colors.transparent,
           ),
-          titleTextStyle: TextStyle(
-            color: textPrimary,
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-          ),
+          titleTextStyle: brightness == Brightness.dark
+              ? TextStyle(
+                  color: textPrimary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                )
+              : GoogleFonts.lora(
+                  color: textPrimary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
           iconTheme: IconThemeData(color: textSecondary),
         ),
         bottomNavigationBarTheme: BottomNavigationBarThemeData(
@@ -135,22 +175,7 @@ class AppTheme {
           ),
         ),
         dividerTheme: DividerThemeData(color: border, thickness: 1),
-        textTheme: TextTheme(
-          displayLarge:  TextStyle(color: textPrimary, fontWeight: FontWeight.w800),
-          displayMedium: TextStyle(color: textPrimary, fontWeight: FontWeight.w700),
-          headlineLarge: TextStyle(color: textPrimary, fontWeight: FontWeight.w700, fontSize: 26),
-          headlineMedium:TextStyle(color: textPrimary, fontWeight: FontWeight.w600, fontSize: 20),
-          headlineSmall: TextStyle(color: textPrimary, fontWeight: FontWeight.w600, fontSize: 18),
-          titleLarge:    TextStyle(color: textPrimary, fontWeight: FontWeight.w600, fontSize: 16),
-          titleMedium:   TextStyle(color: textPrimary, fontWeight: FontWeight.w500, fontSize: 14),
-          titleSmall:    TextStyle(color: textSecondary, fontWeight: FontWeight.w500, fontSize: 13),
-          bodyLarge:     TextStyle(color: textPrimary, fontSize: 15),
-          bodyMedium:    TextStyle(color: textSecondary, fontSize: 14),
-          bodySmall:     TextStyle(color: textMuted, fontSize: 12),
-          labelLarge:    TextStyle(color: textPrimary, fontWeight: FontWeight.w600, fontSize: 13),
-          labelMedium:   TextStyle(color: textSecondary, fontSize: 12),
-          labelSmall:    TextStyle(color: textMuted, fontSize: 11),
-        ),
+        textTheme: textTheme,
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: card,
@@ -214,7 +239,9 @@ class AppTheme {
           textMuted: textMuted,
         )],
       );
+  }
 }
+
 
 // Custom extension so widgets can access raw palette colours via Theme.of(ctx)
 class AppThemeExtension extends ThemeExtension<AppThemeExtension> {

@@ -4,7 +4,10 @@ import 'package:provider/provider.dart';
 import 'theme/app_theme.dart';
 import 'providers/app_provider.dart';
 import 'screens/main_screen.dart';
+// ignore: unused_import
 import 'screens/login_screen.dart';
+import 'features/strategy/data/repositories/strategy_repository_impl.dart';
+import 'features/strategy/presentation/providers/strategy_provider.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,31 +25,25 @@ class AbhiTradeApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        // Core
         ChangeNotifierProvider(create: (_) => ThemeProvider()..init()),
         ChangeNotifierProvider(create: (_) => AuthProvider()..init()),
         ChangeNotifierProvider(create: (_) => TradingModeProvider()..init()),
-
-        // Market data
         ChangeNotifierProvider(create: (_) => MarketProvider()),
-        ChangeNotifierProvider(create: (_) => MoversProvider()),
-        ChangeNotifierProvider(create: (_) => SearchProvider()),
-        ChangeNotifierProvider(create: (_) => OptionChainProvider()),
-
-        // Portfolio & trading
         ChangeNotifierProvider(create: (_) => PortfolioProvider()),
-        ChangeNotifierProvider(create: (_) => PositionsProvider()),
         ChangeNotifierProvider(create: (_) => WatchlistProvider()),
         ChangeNotifierProvider(create: (_) => OrdersProvider()),
+        ChangeNotifierProvider(
+          create: (_) => StrategyProvider(StrategyRepositoryImpl()),
+        ),
       ],
       child: Consumer<ThemeProvider>(
         builder: (_, theme, __) => MaterialApp(
           title: 'AbhiTrade',
           debugShowCheckedModeBanner: false,
-          theme:      AppTheme.light,
-          darkTheme:  AppTheme.dark,
-          themeMode:  theme.mode,
-          home:       const _RootGuard(),
+          theme: AppTheme.light,
+          darkTheme: AppTheme.dark,
+          themeMode: theme.mode,
+          home: const _RootGuard(),
         ),
       ),
     );
@@ -58,11 +55,8 @@ class _RootGuard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Guest mode — shows main app without login requirement.
-    // Swap to `LoginScreen()` to force authentication.
-    return const MainScreen();
-    // ignore: dead_code
     final auth = context.watch<AuthProvider>();
+    // Show main app if logged in, otherwise login screen
     if (auth.isLoggedIn) return const MainScreen();
     return const LoginScreen();
   }

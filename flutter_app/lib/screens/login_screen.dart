@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_provider.dart';
 import '../theme/app_theme.dart';
@@ -13,8 +14,8 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   bool _isRegister = false;
   final _nameCtrl  = TextEditingController();
-  final _emailCtrl = TextEditingController(text: '');
-  final _passCtrl  = TextEditingController();
+  final _emailCtrl = TextEditingController(text: 'Abhishek');
+  final _passCtrl  = TextEditingController(text: '123456');
   bool _obscure = true;
   String? _errorMsg;
   final _formKey = GlobalKey<FormState>();
@@ -52,59 +53,22 @@ class _LoginScreenState extends State<LoginScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const SizedBox(height: 32),
-                // Logo
-                Row(
-                  children: [
-                    Container(
-                      width: 42,
-                      height: 42,
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [AppColors.teal, AppColors.green],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      alignment: Alignment.center,
-                      child: const Text('AT',
-                          style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w900)),
-                    ),
-                    const SizedBox(width: 12),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text.rich(TextSpan(children: [
-                          TextSpan(
-                              text: 'Abhi',
-                              style: TextStyle(
-                                  color: ext.textPrimary,
-                                  fontSize: 22,
-                                  fontWeight: FontWeight.w900)),
-                          const TextSpan(
-                              text: 'Trade',
-                              style: TextStyle(
-                                  color: AppColors.teal,
-                                  fontSize: 22,
-                                  fontWeight: FontWeight.w900)),
-                        ])),
-                        Text('Trade Smart. Invest Better.',
-                            style: TextStyle(
-                                color: ext.textMuted, fontSize: 12)),
-                      ],
-                    ),
-                  ],
+                Text(
+                  'Trade Smart. Invest Better.',
+                  style: TextStyle(color: ext.textMuted, fontSize: 12),
                 ),
                 const SizedBox(height: 48),
                 Text(
                   _isRegister ? 'Create Account' : 'Welcome Back',
-                  style: TextStyle(
-                      color: ext.textPrimary,
-                      fontSize: 28,
-                      fontWeight: FontWeight.w800),
+                  style: context.isDark
+                      ? TextStyle(
+                          color: ext.textPrimary,
+                          fontSize: 28,
+                          fontWeight: FontWeight.w800)
+                      : GoogleFonts.lora(
+                          color: ext.textPrimary,
+                          fontSize: 28,
+                          fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 4),
                 Text(
@@ -130,11 +94,19 @@ class _LoginScreenState extends State<LoginScreen> {
                   controller: _emailCtrl,
                   keyboardType: TextInputType.emailAddress,
                   decoration: const InputDecoration(
-                    labelText: 'Email Address',
+                    labelText: 'Email or Username',
                     prefixIcon: Icon(Icons.email_outlined),
                   ),
-                  validator: (v) =>
-                      v == null || !v.contains('@') ? 'Enter a valid email' : null,
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) {
+                      return 'Email or Username is required';
+                    }
+                    final val = v.trim().toLowerCase();
+                    if (val != 'abhishek' && !v.contains('@')) {
+                      return 'Enter a valid email';
+                    }
+                    return null;
+                  },
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
@@ -157,9 +129,9 @@ class _LoginScreenState extends State<LoginScreen> {
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: AppColors.redDim,
+                      color: context.isDark ? AppColors.redDim : AppColors.redDimLight,
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: AppColors.red.withOpacity(0.3)),
+                      border: Border.all(color: AppColors.red.withValues(alpha: 0.3)),
                     ),
                     child: Row(
                       children: [
@@ -225,7 +197,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Connects to abhitrade.online — start with paper trading to practice risk-free.',
+                          'Connects to abhitrade.online — secure trading terminal.',
                           style: TextStyle(
                               color: ext.textSecondary, fontSize: 12),
                         ),

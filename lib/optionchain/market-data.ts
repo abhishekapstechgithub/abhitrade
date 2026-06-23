@@ -155,6 +155,64 @@ export async function setSpot(
   } catch { /* non-fatal */ }
 }
 
+// ── Greeks Patch (Angel One Greeks feed) ─────────────────────────────────────
+
+export interface GreeksTick {
+  token:         number;
+  tradingSymbol: string;
+  strike:        number;
+  optType:       'CE' | 'PE';
+  spot:          number;
+  iv:            number;   // percentage, e.g. 16.33 = 16.33%
+  delta:         number;
+  gamma:         number;
+  theta:         number;
+  vega:          number;
+  volume?:       number;
+}
+
+/**
+ * Merge Greeks from Angel One into existing Redis quotes.
+ * Uses getQuotesBatch to avoid N individual reads, then writes back in a pipeline.
+ * If no existing quote is found, seeds from generateMockQuote so token is always populated.
+ */
+export async function writeGreeks(ticks: GreeksTick[]): Promise<number> {
+  if (!ticks.length) return 0;
+
+  const tokens   = ticks.map(t => t.token);
+  const existing = await getQuotesBatch(tokens);
+  let   written  = 0;
+
+  try {
+    const pipeline = redis.pipeline();
+    const ts = Date.now();
+
+    for (const t of ticks) {
+      const base = existing.get(t.token)
+        ?? generateMockQuote(t.token, t.tradingSymbol, t.strike, t.optType, t.spot);
+
+      const updated: OptionQuote = {
+        ...base,
+        tradingSymbol: t.tradingSymbol || base.tradingSymbol,
+        iv:       t.iv,
+        delta:    t.delta,
+        gamma:    t.gamma,
+        theta:    t.theta,
+        vega:     t.vega,
+        volume:   t.volume ?? base.volume,
+        updatedAt: ts,
+      };
+
+      pipeline.set(quoteKey(t.token), JSON.stringify(updated), 'EX', QUOTE_TTL);
+      written++;
+    }
+
+    await pipeline.exec();
+  } catch { /* non-fatal */ }
+
+  return written;
+}
+
 // ── Batch Quote Push (for feed connectors) ────────────────────────────────────
 
 export interface RawTick {

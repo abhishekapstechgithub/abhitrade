@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import '../providers/app_provider.dart';
 import '../theme/app_theme.dart';
 import 'home/home_screen.dart';
-import 'watchlist/watchlist_screen.dart';
 import 'orders/orders_screen.dart';
-import 'portfolio/portfolio_screen.dart';
+import 'strategies/strategies_screen.dart';
+import 'watchlist/watchlist_screen.dart';
 import 'menu/menu_screen.dart';
 
 class MainScreen extends StatefulWidget {
@@ -21,15 +19,14 @@ class _MainScreenState extends State<MainScreen> {
   static const _pages = [
     HomeScreen(),
     WatchlistScreen(),
+    StrategiesScreen(),
     OrdersScreen(),
-    PortfolioScreen(),
     MenuScreen(),
   ];
 
   @override
   Widget build(BuildContext context) {
-    final ext    = context.appColors;
-    final trading = context.watch<TradingModeProvider>();
+    final ext     = context.appColors;
 
     return Scaffold(
       body: IndexedStack(index: _index, children: _pages),
@@ -46,8 +43,8 @@ class _MainScreenState extends State<MainScreen> {
           type: BottomNavigationBarType.fixed,
           selectedItemColor: AppColors.blue,
           unselectedItemColor: ext.textSecondary,
-          selectedLabelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
-          unselectedLabelStyle: const TextStyle(fontSize: 11),
+          selectedLabelStyle: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600),
+          unselectedLabelStyle: const TextStyle(fontSize: 10),
           items: [
             const BottomNavigationBarItem(
               icon: Icon(Icons.home_outlined),
@@ -55,41 +52,24 @@ class _MainScreenState extends State<MainScreen> {
               label: 'Home',
             ),
             const BottomNavigationBarItem(
-              icon: Icon(Icons.bar_chart_outlined),
-              activeIcon: Icon(Icons.bar_chart),
+              icon: Icon(Icons.star_border_outlined),
+              activeIcon: Icon(Icons.star),
               label: 'Watchlist',
             ),
-            BottomNavigationBarItem(
-              icon: const Icon(Icons.receipt_long_outlined),
-              activeIcon: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  const Icon(Icons.receipt_long),
-                  if (trading.isPaper)
-                    Positioned(
-                      top: -3,
-                      right: -3,
-                      child: Container(
-                        width: 8,
-                        height: 8,
-                        decoration: const BoxDecoration(
-                            color: AppColors.amber,
-                            shape: BoxShape.circle),
-                      ),
-                    ),
-                ],
-              ),
-              label: 'Orders',
+            const BottomNavigationBarItem(
+              icon: Icon(Icons.auto_awesome_outlined),
+              activeIcon: Icon(Icons.auto_awesome),
+              label: 'Strategies',
             ),
             const BottomNavigationBarItem(
-              icon: Icon(Icons.account_balance_wallet_outlined),
-              activeIcon: Icon(Icons.account_balance_wallet),
-              label: 'Portfolio',
+              icon: Icon(Icons.receipt_long_outlined),
+              activeIcon: Icon(Icons.receipt_long),
+              label: 'Orders',
             ),
             const BottomNavigationBarItem(
               icon: Icon(Icons.grid_view_outlined),
               activeIcon: Icon(Icons.grid_view),
-              label: 'Menu',
+              label: 'More',
             ),
           ],
         ),

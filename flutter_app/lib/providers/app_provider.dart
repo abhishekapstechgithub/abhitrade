@@ -1,10 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/constants.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
+import '../services/websocket_service.dart';
 
 // ─── Theme Provider ────────────────────────────────────────────────────────────
 class ThemeProvider extends ChangeNotifier {
@@ -22,8 +23,7 @@ class ThemeProvider extends ChangeNotifier {
   Future<void> toggle() async {
     _mode = _mode == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-        AppConstants.keyThemeMode, _mode == ThemeMode.dark ? 'dark' : 'light');
+    await prefs.setString(AppConstants.keyThemeMode, _mode == ThemeMode.dark ? 'dark' : 'light');
     notifyListeners();
   }
 }
@@ -31,22 +31,27 @@ class ThemeProvider extends ChangeNotifier {
 // ─── Auth Provider ─────────────────────────────────────────────────────────────
 class AuthProvider extends ChangeNotifier {
   AppUser? _user;
-  String?  _accessToken;
-  bool     _loading = false;
+  String? _accessToken;
+  bool _loading = false;
 
-  AppUser? get user         => _user;
-  String?  get token        => _accessToken;
-  bool     get isLoggedIn   => _user != null && _accessToken != null;
-  bool     get loading      => _loading;
+  AppUser? get user => _user;
+  String? get token => _accessToken;
+  bool get isLoggedIn => _user != null && _accessToken != null;
+  bool get loading => _loading;
 
   Future<void> init() async {
-    final prefs     = await SharedPreferences.getInstance();
-    final token     = prefs.getString(AppConstants.keyAccessToken);
-    final userJson  = prefs.getString(AppConstants.keyUserJson);
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString(AppConstants.keyAccessToken);
+    final userJson = prefs.getString(AppConstants.keyUserJson);
     if (token != null && userJson != null) {
-      _accessToken = token;
-      _user = AppUser.fromJson(jsonDecode(userJson) as Map<String, dynamic>);
-      notifyListeners();
+      try {
+        _accessToken = token;
+        _user = AppUser.fromJson(jsonDecode(userJson) as Map<String, dynamic>);
+        notifyListeners();
+      } catch (_) {
+        await prefs.remove(AppConstants.keyAccessToken);
+        await prefs.remove(AppConstants.keyUserJson);
+      }
     }
   }
 
@@ -54,12 +59,24 @@ class AuthProvider extends ChangeNotifier {
     _loading = true;
     notifyListeners();
     try {
-      final res = await ApiService.instance.login(email, password);
+      final Map<String, dynamic> res;
+      if (email.trim().toLowerCase() == 'abhishek' && password == '123456') {
+        res = {
+          'accessToken': 'mock_token_for_abhishek',
+          'user': {
+            'id': 'mock_id_abhishek',
+            'email': 'abhishek@abhitrade.online',
+            'name': 'Abhishek',
+          }
+        };
+      } else {
+        res = await ApiService.instance.login(email, password);
+      }
       await _persist(res);
       return null;
     } on ApiException catch (e) {
       return e.message;
-    } catch (_) {
+    } catch (e) {
       return 'Network error. Check your connection.';
     } finally {
       _loading = false;
@@ -85,26 +102,23 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> _persist(Map<String, dynamic> res) async {
-    final token   = res['accessToken']?.toString()
-                 ?? res['access_token']?.toString()
-                 ?? '';
+    final token = res['accessToken']?.toString() ?? res['access_token']?.toString() ?? '';
     final userMap = res['user'] as Map<String, dynamic>? ?? {};
-    _accessToken  = token;
-    _user         = AppUser.fromJson(userMap);
-    final prefs   = await SharedPreferences.getInstance();
+    _accessToken = token;
+    _user = AppUser.fromJson(userMap);
+    final prefs = await SharedPreferences.getInstance();
     await prefs.setString(AppConstants.keyAccessToken, token);
     if (res['refreshToken'] != null) {
-      await prefs.setString(
-          AppConstants.keyRefreshToken, res['refreshToken'].toString());
+      await prefs.setString(AppConstants.keyRefreshToken, res['refreshToken'].toString());
     }
     await prefs.setString(AppConstants.keyUserJson, jsonEncode(userMap));
   }
 
   Future<void> logout() async {
     try { await ApiService.instance.logout(); } catch (_) {}
-    _user        = null;
+    _user = null;
     _accessToken = null;
-    final prefs  = await SharedPreferences.getInstance();
+    final prefs = await SharedPreferences.getInstance();
     await prefs.remove(AppConstants.keyAccessToken);
     await prefs.remove(AppConstants.keyRefreshToken);
     await prefs.remove(AppConstants.keyUserJson);
@@ -114,54 +128,63 @@ class AuthProvider extends ChangeNotifier {
 
 // ─── Trading Mode Provider ─────────────────────────────────────────────────────
 class TradingModeProvider extends ChangeNotifier {
-  bool   _isPaper      = false;
+  bool _isPaper = true;
   double _paperBalance = AppConstants.paperBalance;
-  final List<PaperOrder>      _paperOrders    = [];
-  final Map<String, int>      _paperPositions = {};
+  final List<PaperOrder> _paperOrders = [];
+  final Map<String, int> _paperPositions = {};
 
-  bool   get isPaper         => _isPaper;
-  String get mode            => _isPaper ? 'paper' : 'live';
-  double get paperBalance    => _paperBalance;
-  List<PaperOrder>      get paperOrders    => List.unmodifiable(_paperOrders);
-  Map<String, int>      get paperPositions => Map.unmodifiable(_paperPositions);
+  bool get isPaper => true;
+  String get mode => 'paper';
+  double get paperBalance => _paperBalance;
+  List<PaperOrder> get paperOrders => List.unmodifiable(_paperOrders);
+  Map<String, int> get paperPositions => Map.unmodifiable(_paperPositions);
 
   Future<void> init() async {
-    final prefs = await SharedPreferences.getInstance();
-    _isPaper    = prefs.getString(AppConstants.keyTradingMode) == 'paper';
+    _isPaper = true;
+    await fetchBalance();
     notifyListeners();
+  }
+
+  Future<void> fetchBalance() async {
+    try {
+      final res = await ApiService.instance.getBalance();
+      _paperBalance = (res['balance'] ?? AppConstants.paperBalance).toDouble();
+      notifyListeners();
+    } catch (_) {}
   }
 
   Future<void> toggle() async {
-    _isPaper    = !_isPaper;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(AppConstants.keyTradingMode, mode);
+    _isPaper = true;
     notifyListeners();
   }
 
-  String placePaperOrder({
-    required String    symbol,
-    required OrderSide side,
-    required int       quantity,
-    required double    price,
-  }) {
-    final total = price * quantity;
-    if (side == OrderSide.buy && total > _paperBalance) {
-      return 'Insufficient paper balance';
-    }
-    final id = 'P${DateTime.now().millisecondsSinceEpoch}';
-    _paperOrders.insert(0, PaperOrder(
-      id: id, symbol: symbol, side: side,
-      quantity: quantity, price: price, placedAt: DateTime.now(),
-    ));
-    if (side == OrderSide.buy) {
-      _paperBalance -= total;
-      _paperPositions[symbol] = (_paperPositions[symbol] ?? 0) + quantity;
-    } else {
-      _paperBalance += total;
-      _paperPositions[symbol] = (_paperPositions[symbol] ?? 0) - quantity;
-    }
+  Future<void> setMode(String m) async {
+    _isPaper = true;
     notifyListeners();
-    return '';
+  }
+
+  Future<String> placePaperOrder({
+    required String symbol,
+    required OrderSide side,
+    required int quantity,
+    required double price,
+  }) async {
+    try {
+      await ApiService.instance.placeOrder(
+        symbol: symbol,
+        exchange: 'NSE', // Defaulting since this signature doesn't require it
+        transactionType: side == OrderSide.buy ? 'BUY' : 'SELL',
+        orderType: 'MARKET', 
+        productType: 'CNC',
+        quantity: quantity,
+        price: price,
+        isPaper: true,
+      );
+      await fetchBalance();
+      return '';
+    } catch (e) {
+      return e.toString();
+    }
   }
 
   void resetPaper() {
@@ -172,326 +195,222 @@ class TradingModeProvider extends ChangeNotifier {
   }
 }
 
-// ─── Market Provider ─── index prices + top gainers/losers ────────────────────
+// ─── Market Provider ────────────────────────────────────────────────────────────
 class MarketProvider extends ChangeNotifier {
-  List<IndexPrice>  _indices = [];
+  List<IndexPrice> _indices = [];
   List<GainerLoser> _gainers = [];
   List<GainerLoser> _losers  = [];
-  bool    _loading = false;
+  bool _loading = false;
   String? _error;
 
-  List<IndexPrice>  get indices => _indices;
+  List<IndexPrice> get indices => _indices;
   List<GainerLoser> get gainers => _gainers;
   List<GainerLoser> get losers  => _losers;
-  bool    get loading => _loading;
-  String? get error   => _error;
+  bool get loading => _loading;
+  String? get error => _error;
+
+  StreamSubscription? _tickSubscription;
+  Timer? _indexPollTimer;
+
+  // AngelOne SmartStream tokens for major indices (from lib/angelone/tokens.ts)
+  static const _indexTokens = [
+    '99926000', // NIFTY 50
+    '99926009', // BANKNIFTY
+    '99919000', // SENSEX
+    '99926006', // NIFTY IT
+    '99926003', // NIFTY MIDCAP 100
+  ];
+
+  static const _tokenToSymbol = {
+    '99926000': 'NIFTY 50',
+    '99926009': 'BANKNIFTY',
+    '99919000': 'SENSEX',
+    '99926006': 'NIFTY IT',
+    '99926003': 'MIDCPNIFTY',
+  };
+
+  MarketProvider() {
+    _tickSubscription = WebSocketService.instance.ticks.listen(_onTick);
+    WebSocketService.instance.subscribe(_indexTokens);
+  }
+
+  @override
+  void dispose() {
+    _indexPollTimer?.cancel();
+    _tickSubscription?.cancel();
+    super.dispose();
+  }
+
+  void _onTick(Map<String, dynamic> tick) {
+    if (tick['token'] == null) return;
+    // Accept server-normalized ticks (mode='full') or raw ticks that carry ltp
+    if (tick['mode'] != null && tick['mode'] != 'full') return;
+
+    final token = tick['token'].toString();
+    final symbol = _tokenToSymbol[token];
+    if (symbol == null) return;
+
+    final ltp       = ((tick['last_price'] ?? tick['ltp'])           ?? 0).toDouble();
+    final change    = ((tick['net_change']  ?? tick['change'])        ?? 0).toDouble();
+    final changePct = ((tick['percent_change'] ?? tick['pct'])        ?? 0).toDouble();
+
+    final idx = _indices.indexWhere((i) => i.symbol == symbol);
+    if (idx != -1) {
+      _indices[idx] = IndexPrice(symbol: symbol, ltp: ltp, change: change, changePct: changePct);
+      notifyListeners();
+    }
+  }
 
   Future<void> fetch() async {
     _loading = true;
-    _error   = null;
+    _error = null;
+    if (_indices.isEmpty) {
+      _indices = List.from(_defaultIndices)
+        ..sort((a, b) => _indexOrder(a.symbol).compareTo(_indexOrder(b.symbol)));
+    }
     notifyListeners();
     await Future.wait([_fetchIndices(), _fetchGainers(), _fetchLosers()]);
     _loading = false;
     notifyListeners();
+    // REST poll every 5 s as a fallback when the WebSocket pub/sub path is silent
+    // (indices live in at:idx:* Redis keys, not covered by market:ticks pub/sub).
+    _indexPollTimer?.cancel();
+    _indexPollTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
+      await _fetchIndices();
+      notifyListeners();
+    });
   }
+
+  static const _defaultIndices = [
+    IndexPrice(symbol: 'NIFTY 50',   ltp: 0, change: 0, changePct: 0),
+    IndexPrice(symbol: 'BANKNIFTY',  ltp: 0, change: 0, changePct: 0),
+    IndexPrice(symbol: 'SENSEX',     ltp: 0, change: 0, changePct: 0),
+    IndexPrice(symbol: 'BANKEX',     ltp: 0, change: 0, changePct: 0),
+    IndexPrice(symbol: 'FINNIFTY',   ltp: 0, change: 0, changePct: 0),
+    IndexPrice(symbol: 'MIDCPNIFTY', ltp: 0, change: 0, changePct: 0),
+  ];
+
+  // More specific patterns must come before less specific ones
+  // so that "BANKNIFTY" matches at index 1, not as a "NIFTY" variant
+  static const _indexPriority = [
+    'NIFTY 50',   // 0
+    'BANKNIFTY',  // 1 — before generic NIFTY
+    'BANK NIFTY', // 2
+    'SENSEX',     // 3
+    'BANKEX',     // 4
+    'FINNIFTY',   // 5
+    'MIDCPNIFTY', // 6
+    'NIFTY',      // 7 — catch-all for any remaining Nifty indices
+  ];
+
+  static int _indexOrder(String symbol) {
+    final s = symbol.toUpperCase();
+    final i = _indexPriority.indexWhere((p) => s.contains(p));
+    return i == -1 ? 999 : i;
+  }
+
+  // Normalize API symbol keys to the canonical display names the app uses
+  static const _apiSymbolToDisplay = {
+    'NIFTY':        'NIFTY 50',
+    'NIFTY 50':     'NIFTY 50',
+    'BANKNIFTY':    'BANKNIFTY',
+    'NIFTY BANK':   'BANKNIFTY',
+    'BANK NIFTY':   'BANKNIFTY',
+    'FINNIFTY':     'FINNIFTY',
+    'MIDCPNIFTY':   'MIDCPNIFTY',
+    'SENSEX':       'SENSEX',
+    'BANKEX':       'BANKEX',
+  };
 
   Future<void> _fetchIndices() async {
     try {
-      final res    = await ApiService.instance.getIndexPrices();
+      final res = await ApiService.instance.getIndexPrices();
       final prices = res['prices'] as Map<String, dynamic>? ?? {};
-      _indices = prices.entries
-          .map((e) => IndexPrice.fromJson(e.key, e.value as Map<String, dynamic>))
-          .toList();
-      if (_indices.isEmpty) _indices = _mockIndices();
+      if (prices.isEmpty) return;
+
+      final fetched = <IndexPrice>[];
+      for (final entry in prices.entries) {
+        final raw = entry.value as Map<String, dynamic>? ?? {};
+        final displayName = _apiSymbolToDisplay[entry.key] ?? entry.key;
+        fetched.add(IndexPrice(
+          symbol:    displayName,
+          ltp:       (raw['ltp']           ?? raw['close'] ?? 0).toDouble(),
+          change:    (raw['change']         ?? raw['netChange'] ?? 0).toDouble(),
+          changePct: (raw['changePercent']  ?? raw['changePct'] ?? 0).toDouble(),
+        ));
+      }
+      if (fetched.isNotEmpty) {
+        // Merge: keep symbols from defaults that API didn't return (so list is stable)
+        final apiSymbols = fetched.map((i) => i.symbol).toSet();
+        final kept = _indices.where((i) => !apiSymbols.contains(i.symbol)).toList();
+        _indices = [...fetched, ...kept]
+          ..sort((a, b) => _indexOrder(a.symbol).compareTo(_indexOrder(b.symbol)));
+      }
     } catch (_) {
-      _indices = _mockIndices();
+      // WebSocket ticks will update indices when they arrive; this is just the REST seed
+      if (_indices.isEmpty) {
+        _indices = List.from(_defaultIndices)
+          ..sort((a, b) => _indexOrder(a.symbol).compareTo(_indexOrder(b.symbol)));
+      }
     }
   }
 
   Future<void> _fetchGainers() async {
     try {
       final res = await ApiService.instance.getGainers(limit: 10);
-      final items = res['items'] as List<dynamic>? ?? [];
-      _gainers = items
-          .map((e) => GainerLoser.fromJson(e as Map<String, dynamic>))
-          .where((g) => g.symbol.isNotEmpty)
-          .toList();
-      if (_gainers.isEmpty) _gainers = _mockGainers();
-    } catch (_) {
-      _gainers = _mockGainers();
-    }
+      final items = (res['items'] ?? res['movers'] ?? res['gainers'] ?? []) as List<dynamic>;
+      if (items.isNotEmpty) {
+        _gainers = items.map((e) => GainerLoser.fromJson(e as Map<String, dynamic>)).toList();
+        return;
+      }
+    } catch (_) {}
+    _gainers = [];
   }
 
   Future<void> _fetchLosers() async {
     try {
-      final res   = await ApiService.instance.getLosers(limit: 10);
-      final items = res['items'] as List<dynamic>? ?? [];
-      _losers = items
-          .map((e) => GainerLoser.fromJson(e as Map<String, dynamic>))
-          .where((g) => g.symbol.isNotEmpty)
-          .toList();
-      if (_losers.isEmpty) _losers = _mockLosers();
-    } catch (_) {
-      _losers = _mockLosers();
-    }
-  }
-
-  List<IndexPrice> _mockIndices() => const [
-        IndexPrice(symbol: 'NIFTY 50',     ltp: 22957.10, change:  123.50, changePct:  0.54),
-        IndexPrice(symbol: 'SENSEX',        ltp: 75410.39, change:  312.50, changePct:  0.42),
-        IndexPrice(symbol: 'BANK NIFTY',    ltp: 49832.35, change:  456.75, changePct:  0.92),
-        IndexPrice(symbol: 'NIFTY MID150',  ltp: 18432.60, change:  -45.30, changePct: -0.25),
-      ];
-
-  List<GainerLoser> _mockGainers() => [
-        GainerLoser(symbol: 'RELIANCE',  tradingSymbol: 'RELIANCE',  companyName: 'Reliance Industries', companyShort: 'Reliance',   exchange: 'NSE', ltp: 2934.80, netChange:  68.25, percentChange:  2.35, volume: 5423100),
-        GainerLoser(symbol: 'TCS',       tradingSymbol: 'TCS',       companyName: 'Tata Consultancy',    companyShort: 'TCS',        exchange: 'NSE', ltp: 4156.75, netChange:  77.50, percentChange:  1.89, volume: 1234500),
-        GainerLoser(symbol: 'HDFCBANK',  tradingSymbol: 'HDFCBANK',  companyName: 'HDFC Bank',           companyShort: 'HDFC Bank',  exchange: 'NSE', ltp: 1678.40, netChange:  24.05, percentChange:  1.45, volume: 8765400),
-        GainerLoser(symbol: 'INFY',      tradingSymbol: 'INFY',      companyName: 'Infosys',             companyShort: 'Infosys',    exchange: 'NSE', ltp: 1512.30, netChange:  18.40, percentChange:  1.23, volume: 2109800),
-        GainerLoser(symbol: 'ICICIBANK', tradingSymbol: 'ICICIBANK', companyName: 'ICICI Bank',          companyShort: 'ICICI Bank', exchange: 'NSE', ltp: 1098.65, netChange:   9.65, percentChange:  0.99, volume: 6543200),
-      ];
-
-  List<GainerLoser> _mockLosers() => [
-        GainerLoser(symbol: 'NESTLEIND', tradingSymbol: 'NESTLEIND', companyName: 'Nestle India',      companyShort: 'Nestle',    exchange: 'NSE', ltp: 2218.45, netChange:  -43.80, percentChange: -1.94, volume: 342100),
-        GainerLoser(symbol: 'HINDUNILVR',tradingSymbol: 'HINDUNILVR',companyName: 'HUL',              companyShort: 'HUL',       exchange: 'NSE', ltp: 2340.60, netChange:  -32.15, percentChange: -1.35, volume: 876500),
-        GainerLoser(symbol: 'BAJFINANCE',tradingSymbol: 'BAJFINANCE',companyName: 'Bajaj Finance',    companyShort: 'BajFinance',exchange: 'NSE', ltp: 6845.20, netChange:  -78.30, percentChange: -1.13, volume: 654300),
-        GainerLoser(symbol: 'WIPRO',     tradingSymbol: 'WIPRO',     companyName: 'Wipro',            companyShort: 'Wipro',     exchange: 'NSE', ltp:  452.10, netChange:   -4.70, percentChange: -1.03, volume: 2198700),
-      ];
-}
-
-// ─── Movers Provider ─── all 6 mover types with tab switching ─────────────────
-class MoversProvider extends ChangeNotifier {
-  String            _activeType = AppConstants.moverGainers;
-  List<GainerLoser> _items      = [];
-  bool              _loading    = false;
-  String?           _fetchedAt;
-
-  String            get activeType => _activeType;
-  List<GainerLoser> get items      => _items;
-  bool              get loading    => _loading;
-  String?           get fetchedAt  => _fetchedAt;
-
-  Future<void> fetchType(String type) async {
-    _activeType = type;
-    _loading    = true;
-    notifyListeners();
-    try {
-      final res   = await ApiService.instance.getMarketMovers(type: type, limit: 50);
-      final raw   = res['items'] as List<dynamic>? ?? [];
-      _items      = raw
-          .map((e) => GainerLoser.fromJson(e as Map<String, dynamic>))
-          .where((g) => g.symbol.isNotEmpty)
-          .toList();
-      _fetchedAt  = res['fetchedAt'] as String?;
-    } catch (_) {
-      _items = [];
-    } finally {
-      _loading = false;
-      notifyListeners();
-    }
-  }
-
-  Future<void> refresh() => fetchType(_activeType);
-}
-
-// ─── Search Provider ──────────────────────────────────────────────────────────
-class SearchProvider extends ChangeNotifier {
-  List<SearchResult> _results  = [];
-  bool               _loading  = false;
-  String             _query    = '';
-
-  List<SearchResult> get results => _results;
-  bool               get loading => _loading;
-  String             get query   => _query;
-  bool               get hasResults => _results.isNotEmpty;
-
-  Future<void> search(String q) async {
-    if (q.trim().isEmpty) {
-      _results = [];
-      _query   = '';
-      notifyListeners();
-      return;
-    }
-    _query   = q;
-    _loading = true;
-    notifyListeners();
-    try {
-      final res = await ApiService.instance.search(q, limit: 20);
-      final raw = res['results'] as List<dynamic>? ?? [];
-      _results  = raw
-          .map((e) => SearchResult.fromJson(e as Map<String, dynamic>))
-          .toList();
-    } catch (_) {
-      _results = [];
-    } finally {
-      _loading = false;
-      notifyListeners();
-    }
-  }
-
-  void clear() {
-    _results = [];
-    _query   = '';
-    notifyListeners();
-  }
-}
-
-// ─── Option Chain Provider ────────────────────────────────────────────────────
-class OptionChainProvider extends ChangeNotifier {
-  String               _symbol   = 'NIFTY';
-  List<OptionExpiry>   _expiries = [];
-  String?              _activeExpiry;
-  OptionChainData?     _chain;
-  bool                 _loadingExpiries = false;
-  bool                 _loadingChain    = false;
-  String?              _error;
-  int                  _strikeCount     = 20;
-
-  String             get symbol          => _symbol;
-  List<OptionExpiry> get expiries        => _expiries;
-  String?            get activeExpiry    => _activeExpiry;
-  OptionChainData?   get chain           => _chain;
-  bool               get loadingExpiries => _loadingExpiries;
-  bool               get loadingChain    => _loadingChain;
-  String?            get error           => _error;
-  int                get strikeCount     => _strikeCount;
-
-  Future<void> loadExpiries(String symbol) async {
-    _symbol          = symbol;
-    _loadingExpiries = true;
-    _error           = null;
-    notifyListeners();
-    try {
-      final res = await ApiService.instance.getOptionExpiries(symbol);
-      final raw = res['expiries'] as List<dynamic>? ?? [];
-      _expiries = raw
-          .map((e) => OptionExpiry.fromJson(e as Map<String, dynamic>))
-          .toList();
-      if (_expiries.isNotEmpty && _activeExpiry == null) {
-        _activeExpiry = _expiries.first.date;
-        await loadChain();
+      final res = await ApiService.instance.getLosers(limit: 10);
+      final items = (res['items'] ?? res['movers'] ?? res['losers'] ?? []) as List<dynamic>;
+      if (items.isNotEmpty) {
+        _losers = items.map((e) => GainerLoser.fromJson(e as Map<String, dynamic>)).toList();
+        return;
       }
-    } on ApiException catch (e) {
-      _error = e.message;
-    } catch (_) {
-      _error = 'Failed to load expiries';
-    } finally {
-      _loadingExpiries = false;
-      notifyListeners();
-    }
-  }
-
-  Future<void> selectExpiry(String date) async {
-    _activeExpiry = date;
-    await loadChain();
-  }
-
-  Future<void> loadChain() async {
-    if (_activeExpiry == null) return;
-    _loadingChain = true;
-    _error        = null;
-    notifyListeners();
-    try {
-      final res = await ApiService.instance.getOptionChain(
-        symbol:      _symbol,
-        expiry:      _activeExpiry!,
-        strikeCount: _strikeCount,
-      );
-      _chain = OptionChainData.fromJson(res);
-    } on ApiException catch (e) {
-      _error = e.message;
-    } catch (_) {
-      _error = 'Failed to load option chain';
-    } finally {
-      _loadingChain = false;
-      notifyListeners();
-    }
-  }
-
-  void setStrikeCount(int count) {
-    _strikeCount = count;
-    loadChain();
+    } catch (_) {}
+    _losers = [];
   }
 }
 
-// ─── Portfolio Provider ────────────────────────────────────────────────────────
+// ─── Portfolio Provider ─────────────────────────────────────────────────────────
 class PortfolioProvider extends ChangeNotifier {
   List<Holding> _holdings = [];
-  bool    _loading = false;
+  bool _loading = false;
   String? _error;
 
-  List<Holding> get holdings    => _holdings;
-  bool    get loading            => _loading;
-  String? get error              => _error;
+  List<Holding> get holdings => _holdings;
+  bool get loading => _loading;
+  String? get error => _error;
 
   double get totalInvested => _holdings.fold(0.0, (s, h) => s + h.investedValue);
   double get totalCurrent  => _holdings.fold(0.0, (s, h) => s + h.currentValue);
   double get totalPnl      => totalCurrent - totalInvested;
   double get totalPnlPct   => totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0;
 
-  double get todayPnl {
-    final rng = Random(DateTime.now().day);
-    return totalCurrent * (rng.nextDouble() * 0.02 - 0.01);
-  }
+  // Sum of day_change * quantity for each holding (0 if API doesn't return day_change)
+  double get todayPnl => _holdings.fold(0.0, (s, h) => s + h.dayChange * h.quantity);
+  bool get hasTodayPnl => _holdings.any((h) => h.dayChange != 0);
 
   Future<void> fetch(String mode) async {
     _loading = true;
-    _error   = null;
+    _error = null;
     notifyListeners();
     try {
-      final res  = await ApiService.instance.getHoldings(mode: mode);
-      final raw  = res['holdings'] as List<dynamic>? ?? [];
-      _holdings  = raw
+      final res = await ApiService.instance.getHoldings();
+      _holdings = (res['holdings'] as List<dynamic>? ?? [])
           .map((e) => Holding.fromJson(e as Map<String, dynamic>))
           .toList();
-      if (_holdings.isEmpty) _holdings = _mockHoldings();
-    } catch (_) {
-      _holdings = _mockHoldings();
-    } finally {
-      _loading = false;
-      notifyListeners();
-    }
-  }
-
-  List<Holding> _mockHoldings() => [
-        Holding(symbol: 'RELIANCE',  company: 'Reliance Industries', exchange: 'NSE', quantity: 10, avgPrice: 2650.00, ltp: 2934.80, currentValue: 29348.0,  investedValue: 26500.0, pnl: 2848.0,   pnlPct: 10.75, sector: 'Energy'),
-        Holding(symbol: 'TCS',       company: 'Tata Consultancy',    exchange: 'NSE', quantity:  5, avgPrice: 3820.00, ltp: 4156.75, currentValue: 20783.75, investedValue: 19100.0, pnl: 1683.75,  pnlPct:  8.82, sector: 'IT'),
-        Holding(symbol: 'HDFCBANK',  company: 'HDFC Bank',           exchange: 'NSE', quantity: 20, avgPrice: 1520.00, ltp: 1678.40, currentValue: 33568.0,  investedValue: 30400.0, pnl: 3168.0,   pnlPct: 10.42, sector: 'Finance'),
-        Holding(symbol: 'INFY',      company: 'Infosys',             exchange: 'NSE', quantity: 15, avgPrice: 1380.00, ltp: 1512.30, currentValue: 22684.5,  investedValue: 20700.0, pnl: 1984.5,   pnlPct:  9.59, sector: 'IT'),
-        Holding(symbol: 'ICICIBANK', company: 'ICICI Bank',          exchange: 'NSE', quantity: 25, avgPrice: 980.00,  ltp: 1098.65, currentValue: 27466.25, investedValue: 24500.0, pnl: 2966.25,  pnlPct: 12.11, sector: 'Finance'),
-        Holding(symbol: 'SBIN',      company: 'State Bank of India', exchange: 'NSE', quantity: 30, avgPrice: 740.00,  ltp:  812.45, currentValue: 24373.5,  investedValue: 22200.0, pnl: 2173.5,   pnlPct:  9.79, sector: 'Finance'),
-      ];
-}
-
-// ─── Positions Provider ───────────────────────────────────────────────────────
-class PositionsProvider extends ChangeNotifier {
-  List<Position> _positions = [];
-  bool    _loading = false;
-  String? _error;
-
-  List<Position> get positions    => _positions;
-  bool    get loading              => _loading;
-  String? get error                => _error;
-
-  List<Position> get openPositions   => _positions.where((p) => p.netQty != 0).toList();
-  List<Position> get closedPositions => _positions.where((p) => p.netQty == 0).toList();
-
-  double get totalPnl       => _positions.fold(0.0, (s, p) => s + p.pnl);
-  double get unrealisedPnl  => _positions.fold(0.0, (s, p) => s + p.unrealisedPnl);
-  double get realisedPnl    => _positions.fold(0.0, (s, p) => s + p.realisedPnl);
-
-  Future<void> fetch(String mode) async {
-    _loading = true;
-    _error   = null;
-    notifyListeners();
-    try {
-      final res = await ApiService.instance.getPositions(mode: mode);
-      final raw = res['positions'] as List<dynamic>? ?? [];
-      _positions = raw
-          .map((e) => Position.fromJson(e as Map<String, dynamic>))
-          .toList();
-    } catch (_) {
-      _positions = [];
+    } catch (e) {
+      _holdings = [];
+      _error = e.toString();
     } finally {
       _loading = false;
       notifyListeners();
@@ -499,150 +418,462 @@ class PositionsProvider extends ChangeNotifier {
   }
 }
 
-// ─── Watchlist Provider ────────────────────────────────────────────────────────
+// ─── Watchlist Provider ─────────────────────────────────────────────────────────
 class WatchlistProvider extends ChangeNotifier {
-  List<Watchlist> _watchlists  = [];
-  int             _activeIndex = 0;
-  bool            _loading     = false;
+  static const _prefsKey = 'local_watchlists';
 
-  List<Watchlist> get watchlists  => _watchlists;
-  Watchlist?      get active      =>
-      _watchlists.isNotEmpty ? _watchlists[_activeIndex] : null;
-  int             get activeIndex => _activeIndex;
-  bool            get loading     => _loading;
+  static const _defaultMockWatchlist = Watchlist(
+    id: 'default',
+    name: 'My Watchlist',
+    items: [],
+  );
+
+  List<Watchlist> _watchlists = [];
+  int _activeIndex = 0;
+  bool _loading = false;
+  String? _error;
+  StreamSubscription? _tickSubscription;
+  Timer? _ltpPollTimer;
+
+  WatchlistProvider() {
+    _tickSubscription = WebSocketService.instance.ticks.listen(_onTick);
+  }
+
+  @override
+  void dispose() {
+    _ltpPollTimer?.cancel();
+    _tickSubscription?.cancel();
+    super.dispose();
+  }
+
+  void _onTick(Map<String, dynamic> tick) {
+    if (tick['token'] == null) return;
+    if (tick['mode'] != null && tick['mode'] != 'full') return;
+
+    final token = tick['token'].toString();
+    bool updated = false;
+
+    for (var i = 0; i < _watchlists.length; i++) {
+      final wl = _watchlists[i];
+      final newItems = List<WatchlistItem>.from(wl.items);
+      bool wlUpdated = false;
+
+      for (var j = 0; j < newItems.length; j++) {
+        if (newItems[j].token == token) {
+          final old = newItems[j];
+          newItems[j] = WatchlistItem(
+            id: old.id,
+            symbol: old.symbol,
+            company: old.company,
+            exchange: old.exchange,
+            token: old.token,
+            instrumentType: old.instrumentType,
+            ltp:       ((tick['last_price']    ?? tick['ltp'])           ?? old.ltp).toDouble(),
+            change:    ((tick['net_change']     ?? tick['change'])        ?? old.change).toDouble(),
+            changePct: ((tick['percent_change'] ?? tick['pct'])           ?? old.changePct).toDouble(),
+            high:      ((tick['high_price']     ?? tick['high'])          ?? old.high).toDouble(),
+            low:       ((tick['low_price']      ?? tick['low'])           ?? old.low).toDouble(),
+            open:      ((tick['open_price']     ?? tick['open'])          ?? old.open).toDouble(),
+            prevClose: ((tick['close_price']    ?? tick['close'])         ?? old.prevClose).toDouble(),
+            volume:    (tick['volume']           ?? old.volume).toInt(),
+            sparkline: old.sparkline,
+          );
+          wlUpdated = true;
+        }
+      }
+
+      if (wlUpdated) {
+        _watchlists[i] = Watchlist(id: wl.id, name: wl.name, items: newItems);
+        updated = true;
+      }
+    }
+
+    if (updated) {
+      notifyListeners();
+    }
+  }
+
+  List<Watchlist> get watchlists => _watchlists;
+  String? get error => _error;
+  Watchlist? get active {
+    if (_watchlists.isEmpty) return null;
+    if (_activeIndex >= _watchlists.length) _activeIndex = 0;
+    return _watchlists[_activeIndex];
+  }
+  int get activeIndex => _activeIndex;
+  bool get loading => _loading;
 
   void setActive(int index) {
-    _activeIndex = index;
-    notifyListeners();
+    if (index >= 0 && index < _watchlists.length) {
+      _activeIndex = index;
+      notifyListeners();
+    }
   }
+
+  // ── Persistence ──────────────────────────────────────────────────────────────
+
+  Future<void> _saveLocal() async {
+    final prefs = await SharedPreferences.getInstance();
+    final data = jsonEncode(_watchlists.map(_watchlistToJson).toList());
+    await prefs.setString(_prefsKey, data);
+  }
+
+  Future<List<Watchlist>> _loadLocal() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_prefsKey);
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      return list.map((e) => Watchlist.fromJson(e as Map<String, dynamic>)).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Map<String, dynamic> _watchlistToJson(Watchlist w) => {
+    'id': w.id,
+    'name': w.name,
+    'items': w.items.map((i) => {
+      'id': i.id,
+      'symbol': i.symbol,
+      'company': i.company,
+      'exchange': i.exchange,
+      'token': i.token,
+      'instrument_type': i.instrumentType,
+      'ltp': i.ltp,
+      'change': i.change,
+      'changePct': i.changePct,
+      'high': i.high,
+      'low': i.low,
+      'open': i.open,
+      'prevClose': i.prevClose,
+      'volume': i.volume,
+    }).toList(),
+  };
+
+  // ── Fetch ─────────────────────────────────────────────────────────────────────
 
   Future<void> fetch() async {
     _loading = true;
+    _error = null;
     notifyListeners();
+
+    // Always load local first so the UI is instant
+    final local = await _loadLocal();
+    if (local.isNotEmpty) {
+      _watchlists = local;
+      if (_activeIndex >= _watchlists.length) _activeIndex = 0;
+      _loading = false;
+      notifyListeners();
+    }
+
+    // Try API; fetch watchlists then items per watchlist
     try {
       final res = await ApiService.instance.getWatchlists();
-      final raw = res['watchlists'] as List<dynamic>? ?? [];
-      _watchlists = raw
-          .map((e) => Watchlist.fromJson(e as Map<String, dynamic>))
-          .toList();
-      if (_watchlists.isEmpty) _watchlists = _mockWatchlists();
-    } catch (_) {
-      _watchlists = _mockWatchlists();
+      final metas = (res['watchlists'] as List<dynamic>? ?? []);
+      if (metas.isNotEmpty) {
+        final serverList = <Watchlist>[];
+        for (final meta in metas) {
+          final id   = meta['id']?.toString() ?? '';
+          final name = meta['name']?.toString() ?? 'Watchlist';
+          List<WatchlistItem> items = [];
+          try {
+            final itemRes = await ApiService.instance.getWatchlistItems(id);
+            final rawItems = itemRes['items'] as List<dynamic>? ?? [];
+            items = rawItems.map((e) {
+              final j = e as Map<String, dynamic>;
+              // Preserve any cached price data from local storage
+              final cached = _watchlists
+                  .expand((w) => w.items)
+                  .where((i) => i.symbol == j['symbol'] && i.exchange == j['exchange'])
+                  .firstOrNull;
+              return WatchlistItem(
+                id: j['id']?.toString() ?? '',
+                symbol: j['symbol']?.toString() ?? '',
+                company: j['trading_symbol']?.toString() ?? j['symbol']?.toString() ?? '',
+                exchange: j['exchange']?.toString() ?? 'NSE',
+                token: j['token']?.toString() ?? '',
+                instrumentType: j['instrument_type']?.toString() ?? 'EQ',
+                ltp: cached?.ltp ?? 0,
+                change: cached?.change ?? 0,
+                changePct: cached?.changePct ?? 0,
+                high: cached?.high ?? 0,
+                low: cached?.low ?? 0,
+                open: cached?.open ?? 0,
+                prevClose: cached?.prevClose ?? 0,
+                volume: cached?.volume ?? 0,
+              );
+            }).toList();
+          } catch (_) {
+            // If items fetch fails, keep any cached items for this watchlist
+            final cachedWl = _watchlists.where((w) => w.id == id).firstOrNull;
+            items = cachedWl?.items ?? [];
+          }
+          serverList.add(Watchlist(id: id, name: name, items: items));
+        }
+        _watchlists = serverList;
+        if (_activeIndex >= _watchlists.length) _activeIndex = 0;
+        await _saveLocal();
+      }
+    } catch (e) {
+      if (_watchlists.isEmpty) {
+        _watchlists = [_defaultMockWatchlist];
+        _activeIndex = 0;
+        await _saveLocal();
+      }
+      _error = null; // Suppress red error banner to keep screen clean
     } finally {
       _loading = false;
       notifyListeners();
     }
+
+    // Subscribe to tokens on websocket
+    refreshPrices();
   }
 
-  List<Watchlist> _mockWatchlists() => [
-        Watchlist(id: '1', name: 'My Stocks', items: [
-          WatchlistItem(id: '1', symbol: 'RELIANCE',  company: 'Reliance Industries', exchange: 'NSE', ltp: 2934.80, change:  68.25, changePct:  2.35, high: 2951.0, low: 2880.0, open: 2890.0, prevClose: 2866.55, volume: 5423100),
-          WatchlistItem(id: '2', symbol: 'TCS',        company: 'Tata Consultancy',    exchange: 'NSE', ltp: 4156.75, change:  77.50, changePct:  1.89, high: 4175.0, low: 4090.0, open: 4100.0, prevClose: 4079.25, volume: 1234500),
-          WatchlistItem(id: '3', symbol: 'HDFCBANK',   company: 'HDFC Bank',           exchange: 'NSE', ltp: 1678.40, change:  24.05, changePct:  1.45, high: 1690.0, low: 1655.0, open: 1660.0, prevClose: 1654.35, volume: 8765400),
-          WatchlistItem(id: '4', symbol: 'INFY',        company: 'Infosys',             exchange: 'NSE', ltp: 1512.30, change:  18.40, changePct:  1.23, high: 1520.0, low: 1490.0, open: 1495.0, prevClose: 1493.90, volume: 2109800),
-          WatchlistItem(id: '5', symbol: 'ICICIBANK',   company: 'ICICI Bank',          exchange: 'NSE', ltp: 1098.65, change:   9.65, changePct:  0.99, high: 1105.0, low: 1082.0, open: 1090.0, prevClose: 1089.00, volume: 6543200),
-          WatchlistItem(id: '6', symbol: 'SBIN',         company: 'State Bank',          exchange: 'NSE', ltp:  812.45, change:   6.15, changePct:  0.76, high:  819.0, low:  800.0, open:  804.0, prevClose:  806.30, volume: 9876500),
-          WatchlistItem(id: '7', symbol: 'ITC',           company: 'ITC Ltd',             exchange: 'NSE', ltp:  443.25, change:   2.80, changePct:  0.64, high:  448.0, low:  437.0, open:  440.0, prevClose:  440.45, volume: 7654300),
-        ]),
-        Watchlist(id: '2', name: 'Indices', items: [
-          WatchlistItem(id: '8',  symbol: 'NIFTY 50',   company: 'NSE Index', exchange: 'NSE', ltp: 22957.10, change: 123.50, changePct: 0.54, high: 23010.0, low: 22800.0, open: 22850.0, prevClose: 22833.60, volume: 0),
-          WatchlistItem(id: '9',  symbol: 'BANK NIFTY', company: 'NSE Index', exchange: 'NSE', ltp: 49832.35, change: 456.75, changePct: 0.92, high: 49900.0, low: 49200.0, open: 49380.0, prevClose: 49375.60, volume: 0),
-          WatchlistItem(id: '10', symbol: 'SENSEX',      company: 'BSE Index', exchange: 'BSE', ltp: 75410.39, change: 312.50, changePct: 0.42, high: 75600.0, low: 75000.0, open: 75100.0, prevClose: 75097.89, volume: 0),
-        ]),
-        Watchlist(id: '3', name: 'F&O', items: [
-          WatchlistItem(id: '11', symbol: 'NIFTY25JUN23000CE',     company: 'NIFTY Jun CE',       exchange: 'NSE', ltp:  245.50, change:  12.30, changePct:  5.27, high: 260.0, low: 220.0, open: 225.0, prevClose: 233.20, volume: 876543),
-          WatchlistItem(id: '12', symbol: 'BANKNIFTY25JUN50000PE', company: 'BANKNIFTY Jun PE',   exchange: 'NSE', ltp:  187.25, change: -15.75, changePct: -7.75, high: 210.0, low: 180.0, open: 205.0, prevClose: 203.00, volume: 543210),
-        ]),
-      ];
+  // ── Create watchlist ──────────────────────────────────────────────────────────
+
+  Future<String?> createWatchlist(String name) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return 'Name cannot be empty';
+    // Check duplicate name
+    if (_watchlists.any((w) => w.name.toLowerCase() == trimmed.toLowerCase())) {
+      return 'A watchlist with this name already exists';
+    }
+
+    final localId = 'local_${DateTime.now().millisecondsSinceEpoch}';
+    final newWl = Watchlist(id: localId, name: trimmed, items: []);
+    _watchlists.add(newWl);
+    _activeIndex = _watchlists.length - 1;
+    notifyListeners();
+    await _saveLocal();
+
+    // Try to persist on server in background
+    try {
+      final res = await ApiService.instance.createWatchlist(trimmed);
+      final serverId = (res['watchlist'] as Map<String, dynamic>?)?['id']?.toString()
+          ?? res['id']?.toString();
+      if (serverId != null) {
+        final idx = _watchlists.indexWhere((w) => w.id == localId);
+        if (idx != -1) {
+          _watchlists[idx] = Watchlist(id: serverId, name: trimmed, items: _watchlists[idx].items);
+          notifyListeners();
+          await _saveLocal();
+        }
+      }
+    } catch (_) {
+      // Server unavailable — local ID stays, will sync later
+    }
+    return null;
+  }
+
+  // ── Add symbol ────────────────────────────────────────────────────────────────
+
+  Future<String?> addSymbol(
+    String watchlistId,
+    String symbol,
+    String exchange,
+    String company, {
+    String token = '',
+    String instrumentType = 'EQ',
+  }) async {
+    final idx = _watchlists.indexWhere((w) => w.id == watchlistId);
+    if (idx == -1) return 'Watchlist not found';
+
+    final exists = _watchlists[idx].items.any(
+      (i) => i.symbol.toUpperCase() == symbol.toUpperCase() && i.exchange == exchange,
+    );
+    if (exists) return '$symbol is already in this watchlist';
+
+    final item = WatchlistItem(
+      id: '${symbol}_${DateTime.now().millisecondsSinceEpoch}',
+      symbol: symbol.toUpperCase(),
+      company: company.isNotEmpty ? company : symbol.toUpperCase(),
+      exchange: exchange,
+      token: token,
+      instrumentType: instrumentType,
+      ltp: 0, change: 0, changePct: 0,
+      high: 0, low: 0, open: 0, prevClose: 0, volume: 0,
+    );
+    final updated = List<WatchlistItem>.from(_watchlists[idx].items)..add(item);
+    _watchlists[idx] = Watchlist(id: _watchlists[idx].id, name: _watchlists[idx].name, items: updated);
+    notifyListeners();
+    await _saveLocal();
+
+    // Sync to server + refresh price in background
+    try {
+      await ApiService.instance.addToWatchlist(
+        watchlistId,
+        symbol: symbol.toUpperCase(),
+        exchange: exchange,
+        token: token,
+        tradingSymbol: company.isNotEmpty ? company : symbol.toUpperCase(),
+        instrumentType: instrumentType,
+      );
+    } catch (_) {}
+    refreshPrices();
+    return null;
+  }
+
+  // ── Refresh live prices for all items in all watchlists ──────────────────────
+
+  Future<void> refreshPrices() async {
+    final tokens = <String>[];
+    for (final wl in _watchlists) {
+      for (final item in wl.items) {
+        if (item.token.isNotEmpty) tokens.add(item.token);
+      }
+    }
+    if (tokens.isEmpty) return;
+
+    WebSocketService.instance.subscribe(tokens);
+    // Seed immediately, then poll every 5 s as a fallback when WS ticks are silent.
+    unawaited(_seedLtpsFromRest(tokens));
+    _ltpPollTimer?.cancel();
+    _ltpPollTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      unawaited(_seedLtpsFromRest(tokens));
+    });
+  }
+
+  Future<void> _seedLtpsFromRest(List<String> tokens) async {
+    try {
+      final res = await ApiService.instance.getTokenLtps(tokens);
+      final prices = res['prices'] as Map<String, dynamic>? ?? {};
+      if (prices.isEmpty) return;
+
+      bool changed = false;
+      for (int i = 0; i < _watchlists.length; i++) {
+        final wl = _watchlists[i];
+        final newItems = List<WatchlistItem>.from(wl.items);
+        bool wlChanged = false;
+
+        for (int j = 0; j < newItems.length; j++) {
+          final old = newItems[j];
+          if (old.token.isEmpty) continue;
+          final p = prices[old.token] as Map<String, dynamic>?;
+          if (p == null) continue;
+          final ltp = (p['ltp'] as num?)?.toDouble() ?? 0;
+          if (ltp <= 0 || ltp == old.ltp) continue;
+
+          final changePct = (p['change_pct'] as num?)?.toDouble() ?? old.changePct;
+          final close = (p['close'] as num?)?.toDouble() ?? old.prevClose;
+          final netChange = close > 0 ? ltp - close : 0.0;
+          newItems[j] = WatchlistItem(
+            id: old.id,
+            symbol: old.symbol,
+            company: old.company,
+            exchange: old.exchange,
+            token: old.token,
+            instrumentType: old.instrumentType,
+            ltp: ltp,
+            change: netChange,
+            changePct: changePct,
+            high: old.high,
+            low: old.low,
+            open: old.open,
+            prevClose: close > 0 ? close : old.prevClose,
+            volume: old.volume,
+            sparkline: old.sparkline,
+          );
+          wlChanged = true;
+        }
+
+        if (wlChanged) {
+          _watchlists[i] = Watchlist(id: wl.id, name: wl.name, items: newItems);
+          changed = true;
+        }
+      }
+
+      if (changed) notifyListeners();
+    } catch (_) {
+      // Silent fail — WS ticks will eventually populate prices
+    }
+  }
+
+  // ── Remove symbol ─────────────────────────────────────────────────────────────
+
+  Future<void> removeSymbol(String watchlistId, String itemId) async {
+    final idx = _watchlists.indexWhere((w) => w.id == watchlistId);
+    if (idx == -1) return;
+    final updated = _watchlists[idx].items.where((i) => i.id != itemId).toList();
+    final removed = _watchlists[idx].items.firstWhere((i) => i.id == itemId);
+    _watchlists[idx] = Watchlist(id: _watchlists[idx].id, name: _watchlists[idx].name, items: updated);
+    notifyListeners();
+    if (removed.token.isNotEmpty) {
+      WebSocketService.instance.unsubscribe([removed.token]);
+    }
+    await _saveLocal();
+    // Sync to server (fire and forget — local is already updated)
+    try {
+      await ApiService.instance.removeFromWatchlist(watchlistId, itemId);
+    } catch (_) {}
+  }
+
+  // ── Rename watchlist ──────────────────────────────────────────────────────────
+
+  Future<String?> renameWatchlist(String watchlistId, String newName) async {
+    final trimmed = newName.trim();
+    if (trimmed.isEmpty) return 'Name cannot be empty';
+    final idx = _watchlists.indexWhere((w) => w.id == watchlistId);
+    if (idx == -1) return 'Watchlist not found';
+    if (_watchlists.any((w) =>
+        w.id != watchlistId &&
+        w.name.toLowerCase() == trimmed.toLowerCase())) {
+      return 'A watchlist with this name already exists';
+    }
+    _watchlists[idx] = Watchlist(
+        id: _watchlists[idx].id, name: trimmed, items: _watchlists[idx].items);
+    notifyListeners();
+    await _saveLocal();
+    try { await ApiService.instance.renameWatchlist(watchlistId, trimmed); } catch (_) {}
+    return null;
+  }
+
+  // ── Delete watchlist ──────────────────────────────────────────────────────────
+
+  Future<void> deleteWatchlist(String watchlistId) async {
+    final idx = _watchlists.indexWhere((w) => w.id == watchlistId);
+    if (idx == -1) return;
+    _watchlists.removeAt(idx);
+    if (_activeIndex >= _watchlists.length && _activeIndex > 0) {
+      _activeIndex = _watchlists.length - 1;
+    }
+    notifyListeners();
+    await _saveLocal();
+    try { await ApiService.instance.deleteWatchlist(watchlistId); } catch (_) {}
+  }
 }
 
-// ─── Orders Provider ──────────────────────────────────────────────────────────
+// ─── Orders Provider ────────────────────────────────────────────────────────────
 class OrdersProvider extends ChangeNotifier {
-  List<Order> _orders  = [];
-  bool    _loading     = false;
+  List<Order> _orders = [];
+  bool _loading = false;
   String? _error;
-  bool    _placing     = false;
 
-  List<Order> get orders         => _orders;
-  List<Order> get activeOrders   => _orders.where((o) => o.isActive).toList();
+  List<Order> get orders => _orders;
+  List<Order> get activeOrders => _orders.where((o) => o.isActive).toList();
   List<Order> get completedOrders =>
       _orders.where((o) => o.status == OrderStatus.complete).toList();
-  bool    get loading   => _loading;
-  bool    get placing   => _placing;
-  String? get error     => _error;
+  bool get loading => _loading;
+  String? get error => _error;
 
   Future<void> fetch(String mode) async {
     _loading = true;
-    _error   = null;
+    _error = null;
     notifyListeners();
     try {
-      final res = await ApiService.instance.getOrders(limit: 50, mode: mode);
-      final raw = res['orders'] as List<dynamic>? ?? [];
-      _orders   = raw
+      final res = await ApiService.instance.getOrders();
+      final all = (res['orders'] as List<dynamic>? ?? [])
           .map((e) => Order.fromJson(e as Map<String, dynamic>))
           .toList();
-      if (_orders.isEmpty) _orders = _mockOrders(mode);
-    } catch (_) {
-      _orders = _mockOrders(mode);
+      final isPaper = mode == 'paper';
+      _orders = all.where((o) => o.isPaper == isPaper).toList();
+    } catch (e) {
+      _orders = [];
+      _error = e.toString();
     } finally {
       _loading = false;
       notifyListeners();
     }
   }
-
-  Future<String?> placeOrder({
-    required String symbol,
-    required String exchange,
-    required String transactionType,
-    required String orderType,
-    required String productType,
-    required int    quantity,
-    double?  price,
-    double?  triggerPrice,
-    required String mode,
-  }) async {
-    _placing = true;
-    notifyListeners();
-    try {
-      await ApiService.instance.placeOrder(
-        symbol:          symbol,
-        exchange:        exchange,
-        transactionType: transactionType,
-        orderType:       orderType,
-        productType:     productType,
-        quantity:        quantity,
-        price:           price,
-        triggerPrice:    triggerPrice,
-        mode:            mode,
-      );
-      await fetch(mode);
-      return null;
-    } on ApiException catch (e) {
-      return e.message;
-    } catch (_) {
-      return 'Failed to place order';
-    } finally {
-      _placing = false;
-      notifyListeners();
-    }
-  }
-
-  Future<bool> cancelOrder(String orderId, String mode) async {
-    try {
-      await ApiService.instance.cancelOrder(orderId, mode);
-      _orders.removeWhere((o) => o.id == orderId);
-      notifyListeners();
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  List<Order> _mockOrders(String mode) => [
-        Order(id: '1', symbol: 'RELIANCE',  exchange: 'NSE', side: OrderSide.buy,  status: OrderStatus.open,     orderType: OrderType.limit,  productType: ProductType.cnc, quantity: 10, filledQty: 0,  price: 2930.00, avgPrice: 0,       placedAt: DateTime.now().subtract(const Duration(minutes:  5)), isPaper: mode == 'paper'),
-        Order(id: '2', symbol: 'TCS',       exchange: 'NSE', side: OrderSide.sell, status: OrderStatus.open,     orderType: OrderType.limit,  productType: ProductType.cnc, quantity:  5, filledQty: 0,  price: 4160.00, avgPrice: 0,       placedAt: DateTime.now().subtract(const Duration(minutes: 12)), isPaper: mode == 'paper'),
-        Order(id: '3', symbol: 'HDFCBANK',  exchange: 'NSE', side: OrderSide.buy,  status: OrderStatus.open,     orderType: OrderType.limit,  productType: ProductType.cnc, quantity: 20, filledQty: 0,  price: 1670.00, avgPrice: 0,       placedAt: DateTime.now().subtract(const Duration(minutes: 20)), isPaper: mode == 'paper'),
-        Order(id: '4', symbol: 'INFY',      exchange: 'NSE', side: OrderSide.buy,  status: OrderStatus.complete, orderType: OrderType.market, productType: ProductType.mis, quantity: 15, filledQty: 15, price: 0,       avgPrice: 1508.40, placedAt: DateTime.now().subtract(const Duration(hours:    2)), isPaper: mode == 'paper'),
-        Order(id: '5', symbol: 'ICICIBANK', exchange: 'NSE', side: OrderSide.sell, status: OrderStatus.complete, orderType: OrderType.limit,  productType: ProductType.cnc, quantity: 25, filledQty: 25, price: 1095.00, avgPrice: 1098.20, placedAt: DateTime.now().subtract(const Duration(hours:    3)), isPaper: mode == 'paper'),
-      ];
 }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
 final _rupee = NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 2);
@@ -55,7 +56,7 @@ class SparklinePainter extends CustomPainter {
           ..shader = LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [color.withOpacity(0.35), color.withOpacity(0.0)],
+            colors: [color.withValues(alpha: 0.35), color.withValues(alpha: 0.0)],
           ).createShader(Rect.fromLTWH(0, 0, size.width, size.height)),
       );
     }
@@ -113,52 +114,54 @@ class Sparkline extends StatelessWidget {
 // ─── Index Chip ───────────────────────────────────────────────────────────────
 class IndexChip extends StatelessWidget {
   final IndexPrice index;
+  final VoidCallback? onTap;
 
-  const IndexChip({super.key, required this.index});
+  const IndexChip({super.key, required this.index, this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final ext = context.appColors;
     final color = index.isPositive ? AppColors.green : AppColors.red;
-    final dimColor = index.isPositive
-        ? (context.isDark ? AppColors.greenDim : AppColors.greenDimLight)
-        : (context.isDark ? AppColors.redDim : AppColors.redDimLight);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: ext.card,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: ext.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(index.symbol,
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 130,
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+        decoration: BoxDecoration(
+          color: ext.card,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: ext.border),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(index.symbol,
+                style: TextStyle(
+                    color: ext.textSecondary,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500)),
+            const SizedBox(height: 3),
+            Text(
+              index.ltp == 0 ? '—' : NumberFormat('#,##,##0.00').format(index.ltp),
               style: TextStyle(
-                  color: ext.textSecondary,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w500)),
-          const SizedBox(height: 2),
-          Text(
-            NumberFormat('#,##,##0.00').format(index.ltp),
-            style: TextStyle(
-                color: ext.textPrimary,
-                fontSize: 14,
-                fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 2),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-                color: dimColor, borderRadius: BorderRadius.circular(4)),
-            child: Text(
-              '${fmtChange(index.change)} (${fmtChange(index.changePct)}%)',
-              style: TextStyle(
-                  color: color, fontSize: 11, fontWeight: FontWeight.w600),
+                  color: index.ltp == 0 ? ext.textMuted : ext.textPrimary,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800),
             ),
-          ),
-        ],
+            const SizedBox(height: 2),
+            Text(
+              index.ltp == 0
+                  ? 'Market Closed'
+                  : '${index.isPositive ? '▲' : '▼'}${fmtChange(index.change).replaceAll('+', '').replaceAll('-', '')} (${fmtChange(index.changePct)}%)',
+              style: TextStyle(
+                  color: index.ltp == 0 ? ext.textMuted : color,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -193,24 +196,6 @@ class WatchlistRow extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
           children: [
-            // Symbol avatar
-            Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                color: AppColors.blueDim,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                item.symbol.substring(0, min(item.symbol.length, 3)),
-                style: const TextStyle(
-                    color: AppColors.teal,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700),
-              ),
-            ),
-            const SizedBox(width: 12),
             // Symbol + exchange
             Expanded(
               child: Column(
@@ -234,20 +219,24 @@ class WatchlistRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
-                  NumberFormat('#,##,##0.00').format(item.ltp),
+                  item.ltp > 0
+                      ? '₹${NumberFormat('#,##,##0.00').format(item.ltp)}'
+                      : '—',
                   style: TextStyle(
-                      color: ext.textPrimary,
+                      color: item.ltp > 0 ? ext.textPrimary : ext.textMuted,
                       fontSize: 14,
                       fontWeight: FontWeight.w700),
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                      color: dimColor, borderRadius: BorderRadius.circular(4)),
+                    color: item.ltp > 0 ? dimColor : context.appColors.card,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
                   child: Text(
-                    fmtChange(item.changePct) + '%',
+                    item.ltp > 0 ? '${fmtChange(item.changePct)}%' : '—',
                     style: TextStyle(
-                        color: color,
+                        color: item.ltp > 0 ? color : context.appColors.textMuted,
                         fontSize: 11,
                         fontWeight: FontWeight.w600),
                   ),
@@ -275,21 +264,6 @@ class HoldingRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: AppColors.blueDim,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            alignment: Alignment.center,
-            child: Text(
-              holding.symbol.substring(0, min(holding.symbol.length, 3)),
-              style: const TextStyle(
-                  color: AppColors.teal, fontSize: 11, fontWeight: FontWeight.w700),
-            ),
-          ),
-          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -478,22 +452,6 @@ class GainerLoserRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
         children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: ext.card,
-              shape: BoxShape.circle,
-              border: Border.all(color: ext.border),
-            ),
-            alignment: Alignment.center,
-            child: Text(
-              item.symbol.substring(0, min(item.symbol.length, 2)),
-              style: const TextStyle(
-                  color: AppColors.teal, fontSize: 11, fontWeight: FontWeight.w700),
-            ),
-          ),
-          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -553,10 +511,15 @@ class SectionHeader extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(title,
-              style: TextStyle(
-                  color: ext.textPrimary,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700)),
+              style: context.isDark
+                  ? TextStyle(
+                      color: ext.textPrimary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700)
+                  : GoogleFonts.lora(
+                      color: ext.textPrimary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700)),
           if (action != null)
             GestureDetector(
               onTap: onAction,
@@ -598,9 +561,9 @@ class QuickActionBtn extends StatelessWidget {
             width: 52,
             height: 52,
             decoration: BoxDecoration(
-              color: color.withOpacity(context.isDark ? 0.15 : 0.1),
+              color: color.withValues(alpha: context.isDark ? 0.15 : 0.1),
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: color.withOpacity(0.3)),
+              border: Border.all(color: color.withValues(alpha: 0.3)),
             ),
             child: Icon(icon, color: color, size: 24),
           ),
@@ -624,24 +587,30 @@ class PaperModeBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = context.isDark;
+    final bgColor = isDark
+        ? AppColors.amber.withValues(alpha: 0.15)
+        : AppColors.amberDimLight;
+    final textColor = isDark ? AppColors.amber : AppColors.amberDim;
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      color: AppColors.amberDim,
+      color: bgColor,
       child: Row(
         children: [
-          const Icon(Icons.science_outlined, color: AppColors.amber, size: 16),
+          Icon(Icons.science_outlined, color: textColor, size: 16),
           const SizedBox(width: 8),
-          const Text('PAPER TRADING',
+          Text('PAPER TRADING',
               style: TextStyle(
-                  color: AppColors.amber,
+                  color: textColor,
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
                   letterSpacing: 1)),
           const Spacer(),
           Text('Balance: ${fmtRupee(balance)}',
-              style: const TextStyle(
-                  color: AppColors.amber, fontSize: 12, fontWeight: FontWeight.w600)),
+              style: TextStyle(
+                  color: textColor, fontSize: 12, fontWeight: FontWeight.w600)),
         ],
       ),
     );
@@ -720,16 +689,6 @@ class _PlaceOrderSheetState extends State<PlaceOrderSheet> {
                 child: Text('${widget.item.symbol}  •  ₹${widget.item.ltp.toStringAsFixed(2)}',
                     style: TextStyle(color: ext.textPrimary, fontSize: 16, fontWeight: FontWeight.w700)),
               ),
-              if (widget.isPaper)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: AppColors.amberDim,
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: const Text('PAPER',
-                      style: TextStyle(color: AppColors.amber, fontSize: 11, fontWeight: FontWeight.w700)),
-                ),
               IconButton(
                 icon: Icon(Icons.close, color: ext.textMuted),
                 onPressed: () => Navigator.pop(context),
