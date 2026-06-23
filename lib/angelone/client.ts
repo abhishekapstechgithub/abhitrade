@@ -151,23 +151,51 @@ export function getCandleData(
 }
 
 // ── Market Quote ──────────────────────────────────────────────────────────────
+export interface MarketQuoteFull {
+  exchange:       string;
+  tradingSymbol:  string;
+  symbolToken:    string;
+  ltp:            number;
+  open:           number;
+  high:           number;
+  low:            number;
+  close:          number;
+  lastTradeQty:   number;
+  exchFeedTime:   string;
+  exchTradeTime:  string;
+  netChange:      number;
+  percentChange:  number;
+  avgPrice:       number;
+  tradeVolume:    number;
+  opnInterest:    number;
+  upperCircuit:   string;
+  lowerCircuit:   string;
+  totBuyQuan:     number;
+  totSellQuan:    number;
+  '52WeekLow':    number;
+  '52WeekHigh':   number;
+  depth?: {
+    buy:  Array<{ price: number; quantity: number; orders: number }>;
+    sell: Array<{ price: number; quantity: number; orders: number }>;
+  };
+}
+
+export interface MarketQuoteUnfetched {
+  exchange:   string;
+  symbolToken: string;
+  message:    string;
+  errorCode:  string;
+}
+
 export function getMarketQuote(
   apiKey: string, accessToken: string,
   mode: 'LTP' | 'OHLC' | 'FULL',
   exchangeTokens: Record<string, string[]>
 ) {
   return callApi<{
-    fetched: Array<{
-      exchange: string; tradingSymbol: string; symbolToken: string;
-      ltp: number; open: number; high: number; low: number; close: number;
-      lastTradeQty: number; exchFeedTime: string; exchTradeTime: string;
-      netChange: number; percentChange: number; avgPrice: number;
-      tradeVolume: number; opnInterest: number;
-      upperCircuit: string; lowerCircuit: string;
-      '52WeekLow': number; '52WeekHigh': number;
-    }>;
-    unfetched: string[];
-  }>('/rest/secure/angelbroking/market/v1/quote', 'POST', apiKey, accessToken,
+    fetched:   MarketQuoteFull[];
+    unfetched: MarketQuoteUnfetched[];
+  }>('/rest/secure/angelbroking/market/v1/quote/', 'POST', apiKey, accessToken,
     { mode, exchangeTokens }
   );
 }
