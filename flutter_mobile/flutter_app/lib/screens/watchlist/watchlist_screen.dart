@@ -7,7 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../providers/app_provider.dart';
 import '../../services/api_service.dart';
 import '../../theme/app_theme.dart';
-import '../../widgets/widgets.dart';
+import '../../widgets/widgets.dart' hide PlaceOrderSheet;
 import '../../models/models.dart';
 import 'stock_detail_sheet.dart';
 import '../orders/place_order_sheet.dart';

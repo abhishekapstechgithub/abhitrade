@@ -9,6 +9,7 @@ import { scheduleMoversSync } from './lib/groww-movers.js';
 import { scheduleWsLive } from './lib/angelone/ws-live.js';
 import { scheduleBhavcopyCron } from './lib/bhavcopy-auto.js';
 import { redis } from './lib/redis-client.js';
+import { tickBus, type LiveTick } from './lib/tick-bus.js';
 
 const app  = express();
 const PORT = Number(process.env.PORT ?? 3001);
@@ -38,65 +39,81 @@ const server = http.createServer(app);
 // ── WebSocket push server (/ws/stream) ─────────────────────────────────────
 // Clients send: { type: 'subscribe', tokens: ['26000', '3045', ...] }
 //               { type: 'unsubscribe', tokens: [...] }
-// Server pushes every 1.5 s: { token, ltp, net_change, percent_change, high, low, open, close, volume, mode: 'full' }
+// Server pushes on each AngelOne tick (< 100ms from exchange) via tickBus.
+// On subscribe, an immediate Redis snapshot is sent for currently-cached prices.
 
 const wss = new WebSocketServer({ server, path: '/ws/stream' });
 
-interface WsClient {
-  ws: WebSocket;
-  tokens: Set<string>;
-  timer: ReturnType<typeof setInterval>;
+function makeTick(token: string, q: Record<string, unknown>) {
+  return {
+    token,
+    mode:           'full',
+    ltp:            q.ltp            ?? 0,
+    net_change:     q.netChange      ?? 0,
+    percent_change: q.percentChange  ?? 0,
+    high:           q.high           ?? 0,
+    low:            q.low            ?? 0,
+    open:           q.open           ?? 0,
+    close:          q.close          ?? 0,
+    volume:         q.volume         ?? 0,
+  };
 }
 
 wss.on('connection', (ws: WebSocket) => {
-  const client: WsClient = { ws, tokens: new Set(), timer: null as unknown as ReturnType<typeof setInterval> };
+  const subscribedTokens = new Set<string>();
+
+  // Send a Redis snapshot for newly subscribed tokens so the client sees prices
+  // immediately (e.g. outside market hours when tickBus is idle)
+  async function sendSnapshot(tokens: string[]) {
+    if (!tokens.length || ws.readyState !== WebSocket.OPEN) return;
+    try {
+      const pipe = redis.pipeline();
+      for (const token of tokens) pipe.get(`at:market:quote:token:${token}`);
+      const results = await pipe.exec();
+      if (!results) return;
+      for (let i = 0; i < tokens.length; i++) {
+        const raw = results[i]?.[1] as string | null;
+        if (!raw || ws.readyState !== WebSocket.OPEN) continue;
+        const q = JSON.parse(raw) as Record<string, unknown>;
+        if ((q.ltp as number) > 0) ws.send(JSON.stringify(makeTick(tokens[i], q)));
+      }
+    } catch { /* Redis unavailable */ }
+  }
 
   ws.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw.toString()) as { type: string; tokens?: string[] };
       if (msg.type === 'subscribe' && Array.isArray(msg.tokens)) {
-        msg.tokens.forEach(t => client.tokens.add(String(t)));
+        const newTokens = msg.tokens.map(String).filter(t => !subscribedTokens.has(t));
+        newTokens.forEach(t => subscribedTokens.add(t));
+        sendSnapshot(newTokens);
       } else if (msg.type === 'unsubscribe' && Array.isArray(msg.tokens)) {
-        msg.tokens.forEach(t => client.tokens.delete(String(t)));
+        msg.tokens.forEach(t => subscribedTokens.delete(String(t)));
       }
     } catch { /* ignore malformed */ }
   });
 
-  ws.on('close', () => clearInterval(client.timer));
-  ws.on('error', () => { clearInterval(client.timer); try { ws.terminate(); } catch { /* ignore */ } });
+  // Forward each AngelOne tick directly to this client if the token is subscribed
+  const tickHandler = (tick: LiveTick) => {
+    if (!subscribedTokens.has(tick.token) || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({
+      token:          tick.token,
+      mode:           'full',
+      ltp:            tick.ltp,
+      net_change:     tick.netChange,
+      percent_change: tick.percentChange,
+      high:           tick.high,
+      low:            tick.low,
+      open:           tick.open,
+      close:          tick.close,
+      volume:         tick.volume,
+    }));
+  };
 
-  client.timer = setInterval(async () => {
-    if (ws.readyState !== WebSocket.OPEN || client.tokens.size === 0) return;
-    try {
-      const pipe = redis.pipeline();
-      const tokens = Array.from(client.tokens);
-      for (const token of tokens) {
-        pipe.get(`at:market:quote:token:${token}`);
-      }
-      const results = await pipe.exec();
-      if (!results) return;
-      for (let i = 0; i < tokens.length; i++) {
-        const raw = results[i]?.[1] as string | null;
-        if (!raw) continue;
-        const q = JSON.parse(raw) as Record<string, unknown>;
-        const tick = {
-          token:          tokens[i],
-          mode:           'full',
-          ltp:            q.ltp            ?? 0,
-          net_change:     q.netChange      ?? 0,
-          percent_change: q.percentChange  ?? 0,
-          high:           q.high           ?? 0,
-          low:            q.low            ?? 0,
-          open:           q.open           ?? 0,
-          close:          q.close          ?? 0,
-          volume:         q.volume         ?? 0,
-        };
-        if ((tick.ltp as number) > 0 && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify(tick));
-        }
-      }
-    } catch { /* Redis unavailable — skip tick */ }
-  }, 1500);
+  tickBus.onTick(tickHandler);
+
+  ws.on('close', () => tickBus.offTick(tickHandler));
+  ws.on('error', () => { tickBus.offTick(tickHandler); try { ws.terminate(); } catch { /* ignore */ } });
 });
 
 server.listen(PORT, () => {

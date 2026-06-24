@@ -425,6 +425,9 @@ export async function syncIndexPrices(): Promise<void> {
         bid: 0, ask: 0, upperCircuit: 0, lowerCircuit: 0, updatedAt: Date.now(),
       };
       pipeline.setex(quoteByToken(q.symbolToken), 90, JSON.stringify(tokenPayload));
+      // SSE market-stream reads at:market:quote:{exchange}:{symbol} — write it so
+      // Flutter index subscriptions receive updates without key mismatch
+      pipeline.setex(quoteBySymbol(q.exchange, symbol), 90, JSON.stringify(tokenPayload));
     }
     await pipeline.exec().catch(() => {});
 

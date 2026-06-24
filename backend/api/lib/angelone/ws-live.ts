@@ -6,6 +6,7 @@ import WebSocket from 'ws';
 import { redis } from '../redis-client';
 import { getPool } from '../db/client';
 import { INDEX_TOKENS, EQUITY_TOKENS } from './tokens';
+import { tickBus } from '../tick-bus';
 
 // ── Token → symbol/exchange maps ──────────────────────────────────────────────
 const TOKEN_SYMBOL   = new Map<string, string>();
@@ -145,7 +146,30 @@ class LiveFeedManager {
 
     ws.on('message', (data: Buffer) => {
       const tick = this.parse(data);
-      if (tick) this.buffer.set(tick.token, tick);
+      if (!tick) return;
+      this.buffer.set(tick.token, tick);
+
+      // Emit immediately to Flutter WS clients via tickBus (bypasses 3s Redis flush delay)
+      const symbol = TOKEN_SYMBOL.get(tick.token);
+      if (symbol) {
+        const netChg = tick.close > 0 ? parseFloat((tick.ltp - tick.close).toFixed(2)) : 0;
+        const pctChg = tick.close > 0 ? parseFloat(((netChg / tick.close) * 100).toFixed(4)) : 0;
+        tickBus.emit('tick', {
+          token:         tick.token,
+          exchange:      tick.exchange,
+          symbol,
+          tradingSymbol: TOKEN_TRADING.get(tick.token) ?? symbol,
+          ltp:           tick.ltp,
+          open:          tick.open,
+          high:          tick.high,
+          low:           tick.low,
+          close:         tick.close,
+          volume:        tick.volume,
+          netChange:     netChg,
+          percentChange: pctChg,
+          ts:            tick.ts,
+        });
+      }
     });
 
     ws.on('close', () => {
