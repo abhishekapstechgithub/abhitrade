@@ -138,11 +138,28 @@ export async function getSpot(symbol: string): Promise<{
   ltp: number; change: number; changePct: number;
 }> {
   const sym = symbol.toUpperCase();
+  // Exchange for common index/equity symbols
+  const exchange = ['SENSEX', 'BANKEX'].includes(sym) ? 'BSE' : 'NSE';
   try {
-    const raw = await redis.get(spotKey(sym));
-    if (raw) return JSON.parse(raw);
+    // 1. Option chain feed key (set by POST /api/optionchain/quote or below)
+    const direct = await redis.get(spotKey(sym));
+    if (direct) return JSON.parse(direct);
+
+    // 2. Live market quote (set by ws-live.ts flush + market-sync)
+    const liveQuote = await redis.get(`at:market:quote:${exchange}:${sym}`);
+    if (liveQuote) {
+      const q = JSON.parse(liveQuote) as { ltp: number; netChange?: number; percentChange?: number };
+      if (q.ltp > 0) return { ltp: q.ltp, change: q.netChange ?? 0, changePct: q.percentChange ?? 0 };
+    }
+
+    // 3. Index price key (set by syncIndexPrices — IndexPrice shape: ltp/change/changePercent)
+    const idxRaw = await redis.get(`at:idx:${sym}`);
+    if (idxRaw) {
+      const idx = JSON.parse(idxRaw) as { ltp: number; change?: number; changePercent?: number; percentChange?: number };
+      if (idx.ltp > 0) return { ltp: idx.ltp, change: idx.change ?? 0, changePct: idx.changePercent ?? idx.percentChange ?? 0 };
+    }
   } catch { /* Redis unavailable */ }
-  // Fallback to mock
+  // Final fallback to mock
   return MOCK_SPOT[sym] ?? { ltp: 0, change: 0, changePct: 0 };
 }
 
