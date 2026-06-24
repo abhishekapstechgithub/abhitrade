@@ -13,6 +13,14 @@ out
 .env.local
 .env.*.local
 
+# ── Monorepo sub-directories (each has its own Dockerfile + context) ─────────
+backend/
+flutter_mobile/
+frontend/
+scripts/
+Bhavcopy/
+index/
+
 # ── Large data files and non-web directories ─────────────────────────────────
 *.csv
 *.txt

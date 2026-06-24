@@ -1,20 +1,26 @@
-version: '3.9'
-
 # ────────────────────────────────────────────────────────────────────────────
-#  TradeKaro — Pull-from-Hub Compose File (no build needed)
+#  AbhiTrade — Pull-from-Hub Compose File  (no build needed on the server)
 #
 #  First deploy (with SSL):
 #    docker-compose -f docker-compose.hub.yml up -d
 #    bash scripts/ssl-init.sh docker-compose.hub.yml
 #
-#  Subsequent starts:
+#  Subsequent starts / updates:
+#    docker-compose -f docker-compose.hub.yml pull
 #    docker-compose -f docker-compose.hub.yml up -d
 #
-#  Pull latest images:
+#  Pull latest images without restarting:
 #    docker-compose -f docker-compose.hub.yml pull
 #
+#  Stop:   docker-compose -f docker-compose.hub.yml down
+#  Reset:  docker-compose -f docker-compose.hub.yml down -v
+#
 #  Traffic flow:
-#    Internet → Nginx (80/443) → app:3000 (internal only)
+#    Internet → Nginx (80/443)
+#      /api/*          → backend-api:3001  (Express)
+#      /ws/stream      → backend-api:3001  (WebSocket)
+#      /api/strategies → strategy-api:8000 (FastAPI)
+#      /*              → app:3000          (Next.js frontend)
 # ────────────────────────────────────────────────────────────────────────────
 
 services:
@@ -23,31 +29,46 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: abhitrade-postgres
-    ports:
-      - '5432:5432'
     environment:
       POSTGRES_USER:     ${POSTGRES_USER:-tradekaro}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tradekaro}
       POSTGRES_DB:       postgres
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./lib/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+      - ./backend/api/lib/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
       - ./scripts/init-databases.sh:/docker-entrypoint-initdb.d/00_init.sh:ro
+      - ./scripts/migrate-password-nullable.sql:/docker-entrypoint-initdb.d/migrate-password-nullable.sql:ro
+      - ./scripts/migrate-market-movers.sql:/docker-entrypoint-initdb.d/migrate-market-movers.sql:ro
+      - ./scripts/migrate-market-movers-v2.sql:/docker-entrypoint-initdb.d/migrate-market-movers-v2.sql:ro
+      - ./scripts/migrate-bhavcopy-prices.sql:/docker-entrypoint-initdb.d/migrate-bhavcopy-prices.sql:ro
+      - ./scripts/migrate-bhavcopy-widenpct.sql:/docker-entrypoint-initdb.d/migrate-bhavcopy-widenpct.sql:ro
+      - ./scripts/migrate-index-prices.sql:/docker-entrypoint-initdb.d/migrate-index-prices.sql:ro
+      - ./scripts/migrate-angle-scrip.sql:/docker-entrypoint-initdb.d/migrate-angle-scrip.sql:ro
+      - ./scripts/migrate-angle-scrip-ltp.sql:/docker-entrypoint-initdb.d/migrate-angle-scrip-ltp.sql:ro
+      - ./scripts/migrate-angle-scrip-bhavcopy.sql:/docker-entrypoint-initdb.d/migrate-angle-scrip-bhavcopy.sql:ro
+      - ./backend/strategy-api/migrations/001_strategies.sql:/docker-entrypoint-initdb.d/migrate-001-strategies.sql:ro
+      - ./backend/strategy-api/migrations/002_paper_trading.sql:/docker-entrypoint-initdb.d/migrate-002-paper-trading.sql:ro
+      - ./backend/strategy-api/migrations/003_option_greeks_strategies.sql:/docker-entrypoint-initdb.d/migrate-003-option-greeks.sql:ro
     restart: unless-stopped
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-tradekaro} -d abhitrade_live']
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 60s
     networks:
-      - abhitrade-net
+      - app-net
+      - db-net
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '0.5'
 
   # ── Redis ──────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: abhitrade-redis
-    ports:
-      - '6379:6379'
     volumes:
       - redis_data:/data
     command: >
@@ -61,14 +82,20 @@ services:
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 10s
-      timeout: 5s
+      timeout: 3s
       retries: 5
     networks:
-      - abhitrade-net
+      - app-net
+      - db-net
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: '0.25'
 
-  # ── Security-master CSV loader (one-shot, pulled from Hub) ────────────────
+  # ── Security-master CSV loader (one-shot) ─────────────────────────────────
   loader:
-    image: abhishekdevopstech/tradekaro-loader:latest
+    image: abhishekdevopstech/abhitrade-loader:latest
     container_name: abhitrade-loader
     volumes:
       - .:/csv:ro
@@ -87,21 +114,26 @@ services:
       postgres:
         condition: service_healthy
     restart: 'no'
+    profiles:
+      - tools
     networks:
-      - abhitrade-net
+      - app-net
 
-  # ── Next.js App — internal only, fronted by Nginx ─────────────────────────
-  # Port 3000 is NOT exposed to the host. All traffic comes through nginx.
-  # Uses the PRODUCTION image (next build baked in) — NOT the dev image.
-  app:
-    image: abhishekdevopstech/tradekaro-app:prod
-    container_name: abhitrade-app
+  # ── Express Backend API ────────────────────────────────────────────────────
+  # Handles all /api/* REST routes + /ws/stream WebSocket.
+  # Not exposed to the host — nginx proxies to it.
+  backend-api:
+    image: abhishekdevopstech/abhitrade-backend:prod
+    container_name: abhitrade-backend-api
     expose:
-      - '3000'
+      - '3001'
     volumes:
       - uploads:/app/tmp/uploads
+      - bhavcopy_data:/app/Bhavcopy
+      - index_data:/app/index
     environment:
       - NODE_ENV=production
+      - PORT=3001
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
@@ -110,10 +142,15 @@ services:
       - POSTGRES_DB_LIVE=abhitrade_live
       - POSTGRES_USER=${POSTGRES_USER:-tradekaro}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-tradekaro}
-      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-https://abhitrade.com/api}
       - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
       - UPLOAD_DIR=/app/tmp/uploads
-      - NEXT_TELEMETRY_DISABLED=1
+      - ANGELONE_API_KEY=${ANGELONE_API_KEY:-}
+      - ANGELONE_CLIENT_ID=${ANGELONE_CLIENT_ID:-}
+      - ANGELONE_PASSWORD=${ANGELONE_PASSWORD:-}
+      - ANGELONE_TOTP_SECRET=${ANGELONE_TOTP_SECRET:-}
+      - RELIGARE_API_KEY=${RELIGARE_API_KEY:-}
+      - COOKIE_SECURE=true
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://abhitrade.com}
     depends_on:
       redis:
         condition: service_healthy
@@ -122,13 +159,96 @@ services:
     restart: unless-stopped
     stop_grace_period: 5s
     healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://localhost:3000/api/health || exit 1']
-      interval: 30s
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3001/api/health || exit 1']
+      interval: 15s
       timeout: 5s
       retries: 3
       start_period: 20s
     networks:
-      - abhitrade-net
+      - proxy-net
+      - app-net
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '1.0'
+
+  # ── FastAPI Strategy API ───────────────────────────────────────────────────
+  # Handles /api/strategies/*, /api/backtests/*, /api/paper/*.
+  # Not exposed to the host — nginx proxies to it.
+  strategy-api:
+    image: abhishekdevopstech/abhitrade-strategy:prod
+    container_name: abhitrade-strategy-api
+    expose:
+      - '8000'
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-tradekaro}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-tradekaro}
+      - POSTGRES_DB=abhitrade_live
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - JWT_ALGORITHM=HS256
+      - AUTH_ENABLED=${AUTH_ENABLED:-true}
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://abhitrade.com}
+      - LOG_LEVEL=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 5s
+    healthcheck:
+      test: ['CMD-SHELL', 'python -c "import urllib.request; urllib.request.urlopen(\"http://localhost:8000/health\")" || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - proxy-net
+      - app-net
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '0.5'
+
+  # ── Next.js Frontend ───────────────────────────────────────────────────────
+  # Serves the UI only — all /api/* is proxied via next.config.mjs rewrites
+  # to backend-api:3001 at runtime. Not exposed to the host.
+  app:
+    image: abhishekdevopstech/abhitrade-frontend:prod
+    container_name: abhitrade-app
+    expose:
+      - '3000'
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-https://abhitrade.com/api}
+      - BACKEND_API_URL=http://backend-api:3001
+      - NEXT_TELEMETRY_DISABLED=1
+    depends_on:
+      backend-api:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 5s
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3000/ || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - proxy-net
+      - app-net
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '1.0'
 
   # ── Nginx — reverse proxy + SSL termination ────────────────────────────────
   nginx:
@@ -146,7 +266,12 @@ services:
       - ./certbot/www:/var/www/certbot:ro
     command: ["/bin/sh", "/docker-entrypoint-custom.sh"]
     depends_on:
-      - app
+      app:
+        condition: service_healthy
+      backend-api:
+        condition: service_healthy
+      strategy-api:
+        condition: service_healthy
     restart: unless-stopped
     stop_grace_period: 5s
     healthcheck:
@@ -156,7 +281,12 @@ services:
       retries: 3
       start_period: 10s
     networks:
-      - abhitrade-net
+      - proxy-net
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: '0.25'
 
   # ── Certbot — auto-renews Let's Encrypt cert every 12 hours ───────────────
   certbot:
@@ -167,8 +297,6 @@ services:
       - ./certbot/www:/var/www/certbot
     entrypoint: /bin/sh -c 'trap exit TERM; while :; do certbot renew --quiet; sleep 12h & wait $${!}; done'
     restart: unless-stopped
-    networks:
-      - abhitrade-net
 
 volumes:
   postgres_data:
@@ -177,8 +305,19 @@ volumes:
     driver: local
   uploads:
     driver: local
+  bhavcopy_data:
+    driver: local
+  index_data:
+    driver: local
 
 networks:
-  abhitrade-net:
+  proxy-net:
     driver: bridge
-    name: abhitrade-net
+    name: abhitrade-proxy-net
+  app-net:
+    driver: bridge
+    name: abhitrade-app-net
+  db-net:
+    driver: bridge
+    name: abhitrade-db-net
+    internal: true
