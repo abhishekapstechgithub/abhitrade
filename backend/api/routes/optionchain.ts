@@ -65,9 +65,16 @@ router.get('/univest', async (req: Request, res: Response) => {
   try {
     const upstream = await fetch('https://livepub.univest.in/DataPub/api/SData/OptChainGeeks', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type':  'application/json',
+        'Accept':        'application/json, text/plain, */*',
+        'Origin':        'https://www.univest.in',
+        'Referer':       'https://www.univest.in/',
+        'User-Agent':    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
       body: JSON.stringify({ Data: { UnderlyingSId: 13, Exch: 1, Exp: exp, Count: 1, Seg: '0' } }),
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(12000),
     });
     if (!upstream.ok) {
       res.status(502).json({ error: `Univest API error: HTTP ${upstream.status}` }); return;
@@ -75,7 +82,9 @@ router.get('/univest', async (req: Request, res: Response) => {
     const raw = await upstream.json() as { code: number; remarks: string; data: unknown };
     res.set('Cache-Control', 'no-store').json(raw);
   } catch (err) {
-    res.status(502).json({ error: 'Failed to reach Univest API', detail: (err as Error).message });
+    const msg = (err as Error).message;
+    console.error('[optionchain/univest] fetch failed:', msg);
+    res.status(502).json({ error: 'Failed to reach Univest API', detail: msg });
   }
 });
 
