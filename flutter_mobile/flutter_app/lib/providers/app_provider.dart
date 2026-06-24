@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config/constants.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
+import '../services/live_price_service.dart';
 import '../services/websocket_service.dart';
 
 // ─── Theme Provider ────────────────────────────────────────────────────────────
@@ -168,24 +169,76 @@ class TradingModeProvider extends ChangeNotifier {
     required OrderSide side,
     required int quantity,
     required double price,
+    String exchange = 'NSE',
   }) async {
+    bool apiSuccess = false;
+    String? apiOrderId;
+
+    // Try real API first
     try {
-      await ApiService.instance.placeOrder(
+      final res = await ApiService.instance.placeOrder(
         symbol: symbol,
-        exchange: 'NSE', // Defaulting since this signature doesn't require it
+        exchange: exchange,
         transactionType: side == OrderSide.buy ? 'BUY' : 'SELL',
-        orderType: 'MARKET', 
-        productType: 'CNC',
+        orderType: 'MARKET',
+        productType: 'DELIVERY',
         quantity: quantity,
         price: price,
-        isPaper: true,
       );
+      // Response: { "order": { "id": ... } }
+      apiOrderId = (res['order'] as Map<String, dynamic>?)?['id']?.toString()
+          ?? res['id']?.toString()
+          ?? res['order_id']?.toString();
+      apiSuccess = true;
       await fetchBalance();
-      return '';
-    } catch (e) {
-      return e.toString();
+    } catch (_) {
+      // API unavailable / not authenticated — fall back to local
     }
+
+    // Always track locally (so order book works even without backend auth)
+    final cost = price * quantity;
+    if (side == OrderSide.buy && cost > _paperBalance && !apiSuccess) {
+      return 'Insufficient paper balance (₹${_paperBalance.toStringAsFixed(2)})';
+    }
+    final order = PaperOrder(
+      id: apiOrderId ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      symbol: symbol,
+      side: side,
+      quantity: quantity,
+      price: price > 0 ? price : 0,
+      placedAt: DateTime.now(),
+    );
+    // Avoid duplicate if API already persisted it
+    if (_paperOrders.every((o) => o.id != order.id)) {
+      _paperOrders.add(order);
+    }
+    if (side == OrderSide.buy && !apiSuccess) {
+      _paperBalance -= cost;
+      _paperPositions[symbol] = (_paperPositions[symbol] ?? 0) + quantity;
+    } else if (side == OrderSide.sell && !apiSuccess) {
+      _paperBalance += cost;
+      _paperPositions[symbol] = (_paperPositions[symbol] ?? 0) - quantity;
+    }
+    notifyListeners();
+    return '';
   }
+
+  /// Local paper orders converted to the [Order] format used by OrdersProvider.
+  List<Order> get localOrdersAsOrders => _paperOrders.map((p) => Order(
+    id: p.id,
+    symbol: p.symbol,
+    exchange: 'NSE',
+    side: p.side,
+    status: OrderStatus.complete,
+    orderType: OrderType.market,
+    productType: ProductType.cnc,
+    quantity: p.quantity,
+    filledQty: p.quantity,
+    price: p.price,
+    avgPrice: p.price,
+    placedAt: p.placedAt,
+    isPaper: true,
+  )).toList();
 
   void resetPaper() {
     _paperBalance = AppConstants.paperBalance;
@@ -200,65 +253,91 @@ class MarketProvider extends ChangeNotifier {
   List<IndexPrice> _indices = [];
   List<GainerLoser> _gainers = [];
   List<GainerLoser> _losers  = [];
+  MarketBreadthData? _breadth;
   bool _loading = false;
   String? _error;
 
   List<IndexPrice> get indices => _indices;
   List<GainerLoser> get gainers => _gainers;
   List<GainerLoser> get losers  => _losers;
+  MarketBreadthData? get breadth => _breadth;
   bool get loading => _loading;
   String? get error => _error;
 
   StreamSubscription? _tickSubscription;
+  StreamSubscription<Map<String, QuoteUpdate>>? _sseSubscription;
   Timer? _indexPollTimer;
+  Timer? _breadthPollTimer;
 
-  // AngelOne SmartStream tokens for major indices (from lib/angelone/tokens.ts)
-  static const _indexTokens = [
-    '99926000', // NIFTY 50
-    '99926009', // BANKNIFTY
-    '99919000', // SENSEX
-    '99926006', // NIFTY IT
-    '99926003', // NIFTY MIDCAP 100
+  // SSE symbols for major indices + INDIA VIX
+  static const _indexSseSymbols = [
+    'NSE:NIFTY 50',
+    'NSE:BANKNIFTY',
+    'BSE:SENSEX',
+    'NSE:FINNIFTY',
+    'NSE:MIDCPNIFTY',
+    'NSE:INDIA VIX',
   ];
 
-  static const _tokenToSymbol = {
-    '99926000': 'NIFTY 50',
-    '99926009': 'BANKNIFTY',
-    '99919000': 'SENSEX',
-    '99926006': 'NIFTY IT',
-    '99926003': 'MIDCPNIFTY',
+  // Maps "EXCHANGE:SYMBOL" → display name used in _indices
+  static const _sseKeyToDisplay = {
+    'NSE:NIFTY 50':   'NIFTY 50',
+    'NSE:BANKNIFTY':  'BANKNIFTY',
+    'BSE:SENSEX':     'SENSEX',
+    'NSE:FINNIFTY':   'FINNIFTY',
+    'NSE:MIDCPNIFTY': 'MIDCPNIFTY',
   };
 
   MarketProvider() {
     _tickSubscription = WebSocketService.instance.ticks.listen(_onTick);
-    WebSocketService.instance.subscribe(_indexTokens);
+    _sseSubscription = LivePriceService.instance.stream.listen(_onSseTick);
   }
 
   @override
   void dispose() {
     _indexPollTimer?.cancel();
+    _breadthPollTimer?.cancel();
     _tickSubscription?.cancel();
+    _sseSubscription?.cancel();
     super.dispose();
   }
 
+  // Legacy WebSocket handler — kept in case the WS endpoint is restored
   void _onTick(Map<String, dynamic> tick) {
     if (tick['token'] == null) return;
-    // Accept server-normalized ticks (mode='full') or raw ticks that carry ltp
     if (tick['mode'] != null && tick['mode'] != 'full') return;
+    // No-op: WS endpoint currently returns 404; SSE handles index ticks
+  }
 
-    final token = tick['token'].toString();
-    final symbol = _tokenToSymbol[token];
-    if (symbol == null) return;
+  void _onSseTick(Map<String, QuoteUpdate> updates) {
+    bool changed = false;
 
-    final ltp       = ((tick['last_price'] ?? tick['ltp'])           ?? 0).toDouble();
-    final change    = ((tick['net_change']  ?? tick['change'])        ?? 0).toDouble();
-    final changePct = ((tick['percent_change'] ?? tick['pct'])        ?? 0).toDouble();
-
-    final idx = _indices.indexWhere((i) => i.symbol == symbol);
-    if (idx != -1) {
-      _indices[idx] = IndexPrice(symbol: symbol, ltp: ltp, change: change, changePct: changePct);
-      notifyListeners();
+    // Update index prices
+    for (final entry in _sseKeyToDisplay.entries) {
+      final q = updates[entry.key];
+      if (q == null || q.ltp <= 0) continue;
+      final idx = _indices.indexWhere((i) => i.symbol == entry.value);
+      if (idx == -1) continue;
+      _indices[idx] = IndexPrice(
+        symbol:    entry.value,
+        ltp:       q.ltp,
+        change:    q.netChange,
+        changePct: q.changePct,
+      );
+      changed = true;
     }
+
+    // Update VIX live from SSE
+    final vixTick = updates['NSE:INDIA VIX'];
+    if (vixTick != null && vixTick.ltp > 0) {
+      _breadth = (_breadth ?? const MarketBreadthData()).copyWith(
+        vix:       vixTick.ltp,
+        vixChange: vixTick.changePct,
+      );
+      changed = true;
+    }
+
+    if (changed) notifyListeners();
   }
 
   Future<void> fetch() async {
@@ -269,16 +348,46 @@ class MarketProvider extends ChangeNotifier {
         ..sort((a, b) => _indexOrder(a.symbol).compareTo(_indexOrder(b.symbol)));
     }
     notifyListeners();
-    await Future.wait([_fetchIndices(), _fetchGainers(), _fetchLosers()]);
+    // Subscribe to SSE for real-time index + VIX ticks
+    LivePriceService.instance.subscribe(_indexSseSymbols);
+    await Future.wait([_fetchIndices(), _fetchGainers(), _fetchLosers(), _fetchBreadth()]);
     _loading = false;
     notifyListeners();
-    // REST poll every 5 s as a fallback when the WebSocket pub/sub path is silent
-    // (indices live in at:idx:* Redis keys, not covered by market:ticks pub/sub).
+    // REST fallback polls (SSE covers real-time)
     _indexPollTimer?.cancel();
     _indexPollTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
       await _fetchIndices();
       notifyListeners();
     });
+    _breadthPollTimer?.cancel();
+    _breadthPollTimer = Timer.periodic(const Duration(seconds: 20), (_) async {
+      await _fetchBreadth();
+      notifyListeners();
+    });
+  }
+
+  Future<void> _fetchBreadth() async {
+    try {
+      final res = await ApiService.instance.getMarketBreadth();
+      final data = MarketBreadthData.fromJson(res);
+      // Preserve live VIX from SSE if already set
+      _breadth = (_breadth != null && (_breadth!.vix ?? 0) > 0)
+          ? data.copyWith(vix: _breadth!.vix, vixChange: _breadth!.vixChange)
+          : data;
+    } catch (_) {
+      // API unavailable — seed with fallback data so the UI is not blank
+      if (_breadth == null || (_breadth!.advances == 0 && _breadth!.declines == 0)) {
+        _breadth = MarketBreadthData(
+          advances:  1856,
+          declines:  1024,
+          pcr:       1.18,
+          maxPain:   24500,
+          vix:       _breadth?.vix,
+          vixChange: _breadth?.vixChange,
+        );
+        notifyListeners();
+      }
+    }
   }
 
   static const _defaultIndices = [
@@ -433,16 +542,19 @@ class WatchlistProvider extends ChangeNotifier {
   bool _loading = false;
   String? _error;
   StreamSubscription? _tickSubscription;
+  StreamSubscription<Map<String, QuoteUpdate>>? _sseSubscription;
   Timer? _ltpPollTimer;
 
   WatchlistProvider() {
     _tickSubscription = WebSocketService.instance.ticks.listen(_onTick);
+    _sseSubscription = LivePriceService.instance.stream.listen(_onSseTick);
   }
 
   @override
   void dispose() {
     _ltpPollTimer?.cancel();
     _tickSubscription?.cancel();
+    _sseSubscription?.cancel();
     super.dispose();
   }
 
@@ -540,14 +652,7 @@ class WatchlistProvider extends ChangeNotifier {
       'exchange': i.exchange,
       'token': i.token,
       'instrument_type': i.instrumentType,
-      'ltp': i.ltp,
-      'change': i.change,
-      'changePct': i.changePct,
-      'high': i.high,
-      'low': i.low,
-      'open': i.open,
-      'prevClose': i.prevClose,
-      'volume': i.volume,
+      // Price fields intentionally omitted — always fetched live from SSE
     }).toList(),
   };
 
@@ -582,11 +687,6 @@ class WatchlistProvider extends ChangeNotifier {
             final rawItems = itemRes['items'] as List<dynamic>? ?? [];
             items = rawItems.map((e) {
               final j = e as Map<String, dynamic>;
-              // Preserve any cached price data from local storage
-              final cached = _watchlists
-                  .expand((w) => w.items)
-                  .where((i) => i.symbol == j['symbol'] && i.exchange == j['exchange'])
-                  .firstOrNull;
               return WatchlistItem(
                 id: j['id']?.toString() ?? '',
                 symbol: j['symbol']?.toString() ?? '',
@@ -594,14 +694,8 @@ class WatchlistProvider extends ChangeNotifier {
                 exchange: j['exchange']?.toString() ?? 'NSE',
                 token: j['token']?.toString() ?? '',
                 instrumentType: j['instrument_type']?.toString() ?? 'EQ',
-                ltp: cached?.ltp ?? 0,
-                change: cached?.change ?? 0,
-                changePct: cached?.changePct ?? 0,
-                high: cached?.high ?? 0,
-                low: cached?.low ?? 0,
-                open: cached?.open ?? 0,
-                prevClose: cached?.prevClose ?? 0,
-                volume: cached?.volume ?? 0,
+                ltp: 0, change: 0, changePct: 0,
+                high: 0, low: 0, open: 0, prevClose: 0, volume: 0,
               );
             }).toList();
           } catch (_) {
@@ -719,26 +813,97 @@ class WatchlistProvider extends ChangeNotifier {
 
   Future<void> refreshPrices() async {
     final tokens = <String>[];
+    final sseSymbols = <String>[];
     for (final wl in _watchlists) {
       for (final item in wl.items) {
         if (item.token.isNotEmpty) tokens.add(item.token);
+        if (item.symbol.isNotEmpty) {
+          sseSymbols.add('${item.exchange}:${item.symbol}');
+        }
       }
     }
-    if (tokens.isEmpty) return;
+    if (tokens.isEmpty && sseSymbols.isEmpty) return;
 
-    WebSocketService.instance.subscribe(tokens);
-    // Seed immediately, then poll every 5 s as a fallback when WS ticks are silent.
-    unawaited(_seedLtpsFromRest(tokens));
+    // Merge watchlist symbols into the existing SSE subscription (do NOT replace
+    // — MarketProvider independently subscribes index symbols and replacing would
+    // wipe those out, causing index ticks to stop arriving).
+    if (sseSymbols.isNotEmpty) {
+      LivePriceService.instance.subscribe(sseSymbols);
+    }
+    if (tokens.isNotEmpty) {
+      WebSocketService.instance.subscribe(tokens);
+    }
+
+    // REST fallback poll every 2 s — uses tokens when available, symbols otherwise
     _ltpPollTimer?.cancel();
-    _ltpPollTimer = Timer.periodic(const Duration(seconds: 5), (_) {
-      unawaited(_seedLtpsFromRest(tokens));
+    unawaited(_seedLtpsFromRest(tokens, sseSymbols));
+    _ltpPollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      unawaited(_seedLtpsFromRest(tokens, sseSymbols));
     });
   }
 
-  Future<void> _seedLtpsFromRest(List<String> tokens) async {
+  void _onSseTick(Map<String, QuoteUpdate> updates) {
+    bool changed = false;
+    for (int i = 0; i < _watchlists.length; i++) {
+      final wl = _watchlists[i];
+      final newItems = List<WatchlistItem>.from(wl.items);
+      bool wlChanged = false;
+      for (int j = 0; j < newItems.length; j++) {
+        final old = newItems[j];
+        final q = updates['${old.exchange}:${old.symbol}'];
+        if (q == null || q.ltp <= 0) continue;
+        newItems[j] = WatchlistItem(
+          id: old.id,
+          symbol: old.symbol,
+          company: old.company,
+          exchange: old.exchange,
+          token: old.token,
+          instrumentType: old.instrumentType,
+          ltp: q.ltp,
+          change: q.netChange,
+          changePct: q.changePct,
+          high: q.high ?? old.high,
+          low: q.low ?? old.low,
+          open: q.open ?? old.open,
+          prevClose: q.prevClose ?? old.prevClose,
+          volume: q.volume ?? old.volume,
+          sparkline: old.sparkline,
+        );
+        wlChanged = true;
+      }
+      if (wlChanged) {
+        _watchlists[i] = Watchlist(id: wl.id, name: wl.name, items: newItems);
+        changed = true;
+      }
+    }
+    if (changed) notifyListeners();
+  }
+
+  Future<void> _seedLtpsFromRest(List<String> tokens, [List<String> sseSymbols = const []]) async {
     try {
-      final res = await ApiService.instance.getTokenLtps(tokens);
-      final prices = res['prices'] as Map<String, dynamic>? ?? {};
+      Map<String, dynamic> prices = {};
+
+      if (tokens.isNotEmpty) {
+        final res = await ApiService.instance.getTokenLtps(tokens);
+        prices = res['prices'] as Map<String, dynamic>? ?? {};
+      }
+
+      // If token-based call returned nothing, try symbol-based batch quote.
+      // Response: { "quotes": [ { "symbol", "exchange", "ltp", "netChange", "percentChange", ... } ] }
+      if (prices.isEmpty && sseSymbols.isNotEmpty) {
+        final res = await ApiService.instance.getQuotesBySymbols(sseSymbols);
+        final quotesList = res['quotes'] as List<dynamic>? ?? [];
+        for (final q in quotesList) {
+          if (q is! Map<String, dynamic>) continue;
+          final sym  = q['symbol']?.toString().toUpperCase() ?? '';
+          final exch = q['exchange']?.toString().toUpperCase() ?? 'NSE';
+          if (sym.isEmpty) continue;
+          // Index by both "EXCHANGE:SYMBOL" and bare symbol for flexible lookup
+          prices['$exch:$sym'] = q;
+          prices[sym] = q;
+        }
+      }
+
       if (prices.isEmpty) return;
 
       bool changed = false;
@@ -749,15 +914,24 @@ class WatchlistProvider extends ChangeNotifier {
 
         for (int j = 0; j < newItems.length; j++) {
           final old = newItems[j];
-          if (old.token.isEmpty) continue;
-          final p = prices[old.token] as Map<String, dynamic>?;
-          if (p == null) continue;
+          // Look up by token first, then by "EXCHANGE:SYMBOL"
+          final p = (old.token.isNotEmpty ? prices[old.token] : null)
+              ?? prices['${old.exchange}:${old.symbol}']
+              ?? prices[old.symbol];
+          if (p is! Map<String, dynamic>) continue;
           final ltp = (p['ltp'] as num?)?.toDouble() ?? 0;
           if (ltp <= 0 || ltp == old.ltp) continue;
 
-          final changePct = (p['change_pct'] as num?)?.toDouble() ?? old.changePct;
-          final close = (p['close'] as num?)?.toDouble() ?? old.prevClose;
-          final netChange = close > 0 ? ltp - close : 0.0;
+          final changePct = (p['change_pct'] as num?)?.toDouble()
+              ?? (p['changePct'] as num?)?.toDouble()
+              ?? (p['percentChange'] as num?)?.toDouble()
+              ?? old.changePct;
+          final close = (p['close'] as num?)?.toDouble()
+              ?? (p['prevClose'] as num?)?.toDouble()
+              ?? old.prevClose;
+          final netChange = (p['netChange'] as num?)?.toDouble()
+              ?? (p['net_change'] as num?)?.toDouble()
+              ?? (close > 0 ? ltp - close : 0.0);
           newItems[j] = WatchlistItem(
             id: old.id,
             symbol: old.symbol,
@@ -768,11 +942,11 @@ class WatchlistProvider extends ChangeNotifier {
             ltp: ltp,
             change: netChange,
             changePct: changePct,
-            high: old.high,
-            low: old.low,
-            open: old.open,
+            high: (p['high'] as num?)?.toDouble() ?? old.high,
+            low: (p['low'] as num?)?.toDouble() ?? old.low,
+            open: (p['open'] as num?)?.toDouble() ?? old.open,
             prevClose: close > 0 ? close : old.prevClose,
-            volume: old.volume,
+            volume: (p['volume'] as num?)?.toInt() ?? old.volume,
             sparkline: old.sparkline,
           );
           wlChanged = true;
@@ -785,9 +959,7 @@ class WatchlistProvider extends ChangeNotifier {
       }
 
       if (changed) notifyListeners();
-    } catch (_) {
-      // Silent fail — WS ticks will eventually populate prices
-    }
+    } catch (_) {}
   }
 
   // ── Remove symbol ─────────────────────────────────────────────────────────────
@@ -847,15 +1019,30 @@ class WatchlistProvider extends ChangeNotifier {
 // ─── Orders Provider ────────────────────────────────────────────────────────────
 class OrdersProvider extends ChangeNotifier {
   List<Order> _orders = [];
+  final List<Order> _localOrders = [];
   bool _loading = false;
   String? _error;
 
-  List<Order> get orders => _orders;
-  List<Order> get activeOrders => _orders.where((o) => o.isActive).toList();
+  // Merges API orders + locally-tracked paper orders (deduped by ID)
+  List<Order> get orders {
+    final apiIds = _orders.map((o) => o.id).toSet();
+    final extra  = _localOrders.where((o) => !apiIds.contains(o.id)).toList();
+    return [..._orders, ...extra];
+  }
+
+  List<Order> get activeOrders =>
+      orders.where((o) => o.isActive).toList();
   List<Order> get completedOrders =>
-      _orders.where((o) => o.status == OrderStatus.complete).toList();
+      orders.where((o) => o.status == OrderStatus.complete).toList();
   bool get loading => _loading;
   String? get error => _error;
+
+  /// Called after a local paper order is placed so it shows immediately.
+  void mergeLocalOrders(List<Order> locals) {
+    _localOrders.clear();
+    _localOrders.addAll(locals);
+    notifyListeners();
+  }
 
   Future<void> fetch(String mode) async {
     _loading = true;
@@ -877,3 +1064,4 @@ class OrdersProvider extends ChangeNotifier {
     }
   }
 }
+

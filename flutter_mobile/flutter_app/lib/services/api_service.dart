@@ -71,8 +71,10 @@ class ApiService {
     try {
       final raw = res.body.trim();
       if (raw.isEmpty || (!raw.startsWith('{') && !raw.startsWith('['))) {
-        if (raw.contains('<html') || raw.contains('<HTML') || raw.contains('<!DOCTYPE') || raw.contains('<!doctype')) {
-          throw ApiException(res.statusCode, 'Server returned HTML. The API might be down or suspended.');
+        if (raw.contains('<html') || raw.contains('<HTML') ||
+            raw.contains('<!DOCTYPE') || raw.contains('<!doctype')) {
+          throw ApiException(res.statusCode,
+              'Server returned HTML. The API might be down or suspended.');
         }
         throw ApiException(res.statusCode, 'Invalid server response');
       }
@@ -80,7 +82,9 @@ class ApiService {
       if (res.statusCode >= 400) {
         throw ApiException(
           res.statusCode,
-          body['error']?.toString() ?? body['message']?.toString() ?? 'Request failed (${res.statusCode})',
+          body['error']?.toString() ??
+              body['message']?.toString() ??
+              'Request failed (${res.statusCode})',
         );
       }
       return body;
@@ -92,6 +96,7 @@ class ApiService {
   }
 
   // ─── Auth ──────────────────────────────────────────────────────────────────
+
   Future<Map<String, dynamic>> login(String email, String password) async {
     final uri = Uri.parse('${AppConstants.apiBase}/api/auth/login');
     final res = await http.post(
@@ -99,35 +104,31 @@ class ApiService {
       headers: _headers(),
       body: jsonEncode({'email': email, 'password': password}),
     ).timeout(const Duration(seconds: 15));
-    // Capture at_sid refresh cookie from Set-Cookie header
+    // Extract refresh token from Set-Cookie (mobile: tk_refresh cookie)
     final setCookie = res.headers['set-cookie'] ?? '';
-    if (setCookie.contains('at_sid=')) {
-      final match = RegExp(r'at_sid=([^;,\s]+)').firstMatch(setCookie);
-      if (match != null) {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString(AppConstants.keyRefreshToken, match.group(1)!);
-      }
+    final match = RegExp(r'tk_refresh=([^;,\s]+)').firstMatch(setCookie);
+    if (match != null) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(AppConstants.keyRefreshToken, match.group(1)!);
     }
     return _parse(res);
   }
 
-  Future<Map<String, dynamic>> register(String name, String email, String phone) =>
-      _post('/api/auth/register', {'name': name, 'email': email, 'phone': phone});
-
-  Future<Map<String, dynamic>> sendOtp(String phone) =>
-      _post('/api/auth/send-otp', {'phone': phone});
-
-  Future<Map<String, dynamic>> verifyOtp(String phone, String otp) =>
-      _post('/api/auth/verify-otp', {'phone': phone, 'otp': otp});
+  // Register reuses the login endpoint with register:true (per API docs §1.1)
+  Future<Map<String, dynamic>> register(String name, String email, String password) =>
+      _post('/api/auth/login',
+          {'name': name, 'email': email, 'password': password, 'register': true},
+          auth: false);
 
   Future<Map<String, dynamic>> refreshToken() async {
     final prefs = await SharedPreferences.getInstance();
-    final atSid = prefs.getString(AppConstants.keyRefreshToken);
+    final token = prefs.getString(AppConstants.keyRefreshToken);
     final headers = _headers();
-    if (atSid != null) headers['Cookie'] = 'at_sid=$atSid';
+    // Mobile sends the refresh token in the X-Refresh-Token header (docs §1.3)
+    if (token != null) headers['X-Refresh-Token'] = token;
     final uri = Uri.parse('${AppConstants.apiBase}/api/auth/refresh');
-    final res = await http.post(uri, headers: headers)
-        .timeout(const Duration(seconds: 15));
+    final res =
+        await http.post(uri, headers: headers).timeout(const Duration(seconds: 15));
     return _parse(res);
   }
 
@@ -139,30 +140,38 @@ class ApiService {
     } catch (_) {}
   }
 
-  // ─── Market ────────────────────────────────────────────────────────────────
+  // ─── Market data ───────────────────────────────────────────────────────────
+
   Future<Map<String, dynamic>> getIndexPrices() =>
       _get('/api/index-prices', auth: false);
 
-  Future<Map<String, dynamic>> getMarketMovers({
+  /// Gainers or losers. [type] = 'gainers' | 'losers' | 'oi-gainers' | 'oi-losers'
+  Future<Map<String, dynamic>> getGainersLosers({
     String type = 'gainers',
     int limit = 20,
   }) =>
-      _get('/api/market-movers?type=$type&limit=$limit', auth: false);
+      _get('/api/gainers-losers?type=$type&limit=$limit', auth: false);
 
   Future<Map<String, dynamic>> getGainers({int limit = 10}) =>
-      getMarketMovers(type: 'gainers', limit: limit);
+      getGainersLosers(type: 'gainers', limit: limit);
 
   Future<Map<String, dynamic>> getLosers({int limit = 10}) =>
-      getMarketMovers(type: 'losers', limit: limit);
+      getGainersLosers(type: 'losers', limit: limit);
 
-  Future<Map<String, dynamic>> getGainersAndLosers({int limit = 10}) =>
-      _get('/api/gainers-losers?limit=$limit', auth: false);
+  Future<Map<String, dynamic>> getMarketBreadth() =>
+      _get('/api/market-breadth', auth: false);
 
-  Future<Map<String, dynamic>> search(String query) async {
-    return _get('/api/scrip/search?q=${Uri.encodeQueryComponent(query)}', auth: true);
+  /// Symbol search — no auth required (docs §4).
+  Future<Map<String, dynamic>> search(String query,
+          {String exchange = 'all', String type = '', int limit = 20}) {
+    final params = StringBuffer('?q=${Uri.encodeQueryComponent(query)}&limit=$limit');
+    if (exchange.isNotEmpty && exchange != 'all') params.write('&exchange=$exchange');
+    if (type.isNotEmpty && type != 'all') params.write('&type=$type');
+    return _get('/api/search$params', auth: false);
   }
 
-  // ─── Token Registry ─────────────────────────────────────────────────────────
+  // ─── Token / price registry ────────────────────────────────────────────────
+
   Future<void> watchTokens(List<String> tokens) async {
     if (tokens.isEmpty) return;
     try {
@@ -177,10 +186,21 @@ class ApiService {
     } catch (_) {}
   }
 
+  /// Batch LTP by instrument token IDs (docs §2.3).
+  /// Response: { "prices": { "<token>": { "ltp", "change_pct", "net_change", "close", ... } } }
   Future<Map<String, dynamic>> getTokenLtps(List<String> tokens) =>
       _get('/api/tokens/ltp?tokens=${tokens.join(',')}', auth: false);
 
-  // ─── Watchlist ─────────────────────────────────────────────────────────────
+  /// Batch quote by EXCHANGE:SYMBOL strings (docs §2.2).
+  /// Response: { "quotes": [ { "symbol", "exchange", "ltp", "netChange", "percentChange", ... } ] }
+  Future<Map<String, dynamic>> getQuotesBySymbols(List<String> symbols) =>
+      _get(
+        '/api/quotes?symbols=${Uri.encodeQueryComponent(symbols.join(','))}',
+        auth: false,
+      );
+
+  // ─── Watchlists ────────────────────────────────────────────────────────────
+
   Future<Map<String, dynamic>> getWatchlists() => _get('/api/watchlists');
 
   Future<Map<String, dynamic>> getWatchlistItems(String watchlistId) =>
@@ -189,7 +209,8 @@ class ApiService {
   Future<Map<String, dynamic>> createWatchlist(String name) =>
       _post('/api/watchlists', {'name': name}, auth: true);
 
-  Future<Map<String, dynamic>> renameWatchlist(String watchlistId, String newName) =>
+  Future<Map<String, dynamic>> renameWatchlist(
+          String watchlistId, String newName) =>
       _patch('/api/watchlists/$watchlistId', {'name': newName});
 
   Future<Map<String, dynamic>> deleteWatchlist(String watchlistId) =>
@@ -215,20 +236,25 @@ class ApiService {
           String watchlistId, String itemId) =>
       _delete('/api/watchlists/$watchlistId/items/$itemId');
 
-  // ─── Holdings ──────────────────────────────────────────────────────────────
-  Future<Map<String, dynamic>> getHoldings() => _get('/api/paper/portfolio/positions', auth: true);
+  // ─── Holdings (docs §8) ────────────────────────────────────────────────────
 
-  // ─── Orders & Balance ──────────────────────────────────────────────────────
+  Future<Map<String, dynamic>> getHoldings() =>
+      _get('/api/holdings', auth: true);
+
+  // ─── Orders (docs §6) ──────────────────────────────────────────────────────
+
   Future<Map<String, dynamic>> getOrders({
     String? status,
     int limit = 50,
     int offset = 0,
   }) {
-    return _get('/api/paper/portfolio/orders', auth: true);
+    final params = <String>[
+      'limit=$limit',
+      'offset=$offset',
+      if (status != null) 'status=$status',
+    ];
+    return _get('/api/orders?${params.join('&')}', auth: true);
   }
-
-  Future<Map<String, dynamic>> getBalance() =>
-      _get('/api/paper/user/balance', auth: true);
 
   Future<Map<String, dynamic>> placeOrder({
     required String symbol,
@@ -239,221 +265,56 @@ class ApiService {
     required int quantity,
     double? price,
     double? triggerPrice,
-    bool isPaper = false,
-    String? token,
     String? tradingSymbol,
   }) =>
-      _post('/api/paper/orders/place', {
-        'token': token ?? symbol,
+      _post('/api/orders', {
+        'exchange': exchange,
+        'symbol': symbol,
         'transaction_type': transactionType.toUpperCase(),
         'order_type': orderType.toUpperCase(),
+        'product_type': productType.toUpperCase(),
         'quantity': quantity,
-        if (price != null) 'price': price,
+        if (price != null && price > 0) 'price': price,
+        if (triggerPrice != null) 'trigger_price': triggerPrice,
+        if (tradingSymbol != null && tradingSymbol.isNotEmpty)
+          'trading_symbol': tradingSymbol,
       }, auth: true);
 
+  /// Cancel an order (docs §6.4) — DELETE /api/orders/{orderId}
   Future<Map<String, dynamic>> cancelOrder(String orderId) =>
-      _post('/api/paper/orders/cancel', {'order_id': orderId}, auth: true);
+      _delete('/api/orders/$orderId');
 
-  // ─── Positions ─────────────────────────────────────────────────────────────
+  // ─── Positions (docs §7) ───────────────────────────────────────────────────
+
   Future<Map<String, dynamic>> getPositions({String? date}) {
-    return _get('/api/paper/portfolio/positions', auth: true);
+    final path = date != null
+        ? '/api/positions?date=$date'
+        : '/api/positions';
+    return _get(path, auth: true);
   }
 
+  // ─── Balance (paper trading — internal endpoint) ───────────────────────────
+
+  Future<Map<String, dynamic>> getBalance() =>
+      _get('/api/paper/user/balance', auth: true);
+
+  // ─── Option chain ──────────────────────────────────────────────────────────
+
+  /// Fetch NIFTY option chain via Univest proxy.
+  /// [expiry] = 'YYYY-MM-DD' format.
+  /// Response: { code, data: { CE: [...], PE: [...], SpotP, SChng, SPerChng } }
+  Future<Map<String, dynamic>> getOptionChain(String expiry) =>
+      _get('/api/optionchain/univest?expiry=$expiry', auth: false);
+
   // ─── Chart data ────────────────────────────────────────────────────────────
+
   Future<Map<String, dynamic>> getChartData(
           String symbol, String exchange, String timeframe) =>
       _get(
-        '/api/yahoo-chart?symbol=${Uri.encodeQueryComponent(symbol)}'
+        '/api/yahoo-chart'
+        '?symbol=${Uri.encodeQueryComponent(symbol)}'
         '&exchange=${Uri.encodeQueryComponent(exchange)}'
         '&timeframe=$timeframe',
         auth: false,
       );
-
-  // ─── Option Chain & Expiries ───────────────────────────────────────────────
-  // Backend: GET /api/optionchain/expiries?symbol=NIFTY
-  // Returns: { symbol, expiries: string[], nearest: string }
-  Future<Map<String, dynamic>> getOptionExpiries(String symbol) => _get(
-        '/api/optionchain/expiries?symbol=${Uri.encodeQueryComponent(symbol)}',
-        auth: false,
-      );
-
-  // Backend: GET /api/optionchain?symbol=NIFTY&expiry=2025-06-26&strikeCount=20
-  // Returns: { symbol, expiry, spot, spotChange, spotChangePct, atm,
-  //            strikeInterval, rows:[{strike,isAtm,isItm,ce:{...},pe:{...}}],
-  //            analytics:{totalCallOI,...}, timestamp, source }
-  Future<Map<String, dynamic>> getOptionChain(
-    String symbol,
-    String expiry, {
-    int strikes = 20,
-  }) =>
-      _get(
-        '/api/optionchain'
-        '?symbol=${Uri.encodeQueryComponent(symbol)}'
-        '&expiry=${Uri.encodeQueryComponent(expiry)}'
-        '&strikeCount=$strikes',
-        auth: false,
-      );
-
-  // ─── IV Data ─────────────────────────────────────────────────────────────
-  Future<Map<String, dynamic>> getIvData(
-          String underlying, String expiry) =>
-      _get(
-        '/api/iv-data'
-        '?underlying=${Uri.encodeQueryComponent(underlying)}'
-        '&expiry=${Uri.encodeQueryComponent(expiry)}',
-        auth: true,
-      );
-
-  // ─── Strategy Greeks ──────────────────────────────────────────────────────
-  Future<Map<String, dynamic>> computeGreeks({
-    required double spot,
-    required double iv,
-    required int dte,
-    required List<Map<String, dynamic>> legsJson,
-    double riskFreeRate = 0.07,
-  }) =>
-      _post(
-        '/api/strategy/greeks',
-        {
-          'spot': spot,
-          'iv': iv,
-          'dte': dte,
-          'risk_free_rate': riskFreeRate,
-          'legs': legsJson,
-        },
-        auth: true,
-      );
-
-  // ─── Payoff ───────────────────────────────────────────────────────────────
-  Future<Map<String, dynamic>> getPayoff({
-    required double spot,
-    required double iv,
-    required int dte,
-    required List<Map<String, dynamic>> legsJson,
-    double priceRangePct = 0.20,
-    int points = 200,
-  }) =>
-      _post(
-        '/api/strategy/payoff',
-        {
-          'spot': spot,
-          'iv': iv,
-          'dte': dte,
-          'legs': legsJson,
-          'price_range_pct': priceRangePct,
-          'points': points,
-        },
-        auth: true,
-      );
-
-  // ─── Strategy Auto-Builder ────────────────────────────────────────────────
-  Future<Map<String, dynamic>> buildStrategy({
-    required String underlying,
-    required String sentiment,
-    required String expiry,
-    int maxLegs = 4,
-    double? maxRiskCr,
-    double? minPop,
-    double? maxPremiumCr,
-  }) =>
-      _post(
-        '/api/strategy/build',
-        {
-          'underlying': underlying,
-          'sentiment': sentiment,
-          'expiry': expiry,
-          'max_legs': maxLegs,
-          if (maxRiskCr != null) 'max_risk_cr': maxRiskCr,
-          if (minPop != null) 'min_pop': minPop,
-          if (maxPremiumCr != null) 'max_premium_cr': maxPremiumCr,
-        },
-        auth: true,
-      );
-
-  // ─── Strategy Templates ───────────────────────────────────────────────────
-  Future<Map<String, dynamic>> getStrategyTemplates({String? sentiment}) {
-    final q = sentiment != null
-        ? '?sentiment=${Uri.encodeQueryComponent(sentiment)}'
-        : '';
-    return _get('/api/strategy/templates$q', auth: false);
-  }
-
-  Future<Map<String, dynamic>> applyStrategyTemplate(
-    int templateId, {
-    required String underlying,
-    required String expiry,
-    required double spot,
-    required double iv,
-  }) =>
-      _post(
-        '/api/strategy/templates/$templateId/apply',
-        {
-          'underlying': underlying,
-          'expiry': expiry,
-          'spot': spot,
-          'iv': iv,
-        },
-        auth: true,
-      );
-
-  // ─── Saved Strategies CRUD ────────────────────────────────────────────────
-  Future<Map<String, dynamic>> getSavedStrategies({
-    int page = 1,
-    int limit = 20,
-    String? search,
-    String? sentiment,
-  }) {
-    var path = '/api/strategy/saved?page=$page&limit=$limit';
-    if (search != null) path += '&search=${Uri.encodeQueryComponent(search)}';
-    if (sentiment != null) {
-      path += '&sentiment=${Uri.encodeQueryComponent(sentiment)}';
-    }
-    return _get(path, auth: true);
-  }
-
-  Future<Map<String, dynamic>> createSavedStrategy(
-          Map<String, dynamic> payload) =>
-      _post('/api/strategy/saved', payload, auth: true);
-
-  Future<Map<String, dynamic>> getSavedStrategy(String id) =>
-      _get('/api/strategy/saved/$id', auth: true);
-
-  Future<Map<String, dynamic>> updateSavedStrategy(
-          String id, Map<String, dynamic> payload) =>
-      _patch('/api/strategy/saved/$id', payload, auth: true);
-
-  Future<Map<String, dynamic>> deleteSavedStrategy(String id) =>
-      _delete('/api/strategy/saved/$id', auth: true);
-
-  Future<Map<String, dynamic>> duplicateSavedStrategy(String id) =>
-      _post('/api/strategy/saved/$id/duplicate', {}, auth: true);
-
-  // ─── Backtesting ─────────────────────────────────────────────────────────
-  Future<Map<String, dynamic>> startBacktest({
-    required String strategyId,
-    required String periodFrom,
-    required String periodTo,
-    String entryDay = 'monday',
-    int entryDte = 30,
-    int exitDte = 5,
-    int stopLossPct = 50,
-    int targetPct = 75,
-  }) =>
-      _post(
-        '/api/strategy/backtest',
-        {
-          'strategy_id': strategyId,
-          'period_from': periodFrom,
-          'period_to': periodTo,
-          'entry_day': entryDay,
-          'entry_dte': entryDte,
-          'exit_dte': exitDte,
-          'stop_loss_pct': stopLossPct,
-          'target_pct': targetPct,
-        },
-        auth: true,
-      );
-
-  Future<Map<String, dynamic>> pollBacktest(String jobId) =>
-      _get('/api/strategy/backtest/$jobId', auth: true);
 }

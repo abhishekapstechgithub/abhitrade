@@ -1,5 +1,4 @@
-import { NextRequest } from 'next/server';
-import { getSession, SESSION_COOKIE, type SessionData } from './session';
+import { getSession, SESSION_COOKIE, type SessionData } from './session.js';
 
 export interface AuthPayload {
   sub: string;   // userId
@@ -15,9 +14,16 @@ export class AuthError extends Error {
   }
 }
 
-/** Read session from cookie → Redis. Returns null if not authenticated. */
-export async function getAuthPayload(req: NextRequest): Promise<AuthPayload | null> {
-  const sessionId = req.cookies.get(SESSION_COOKIE)?.value;
+/** Parse a session ID from a raw cookie header string. */
+function parseCookieHeader(cookieHeader: string | undefined): string | undefined {
+  if (!cookieHeader) return undefined;
+  const match = cookieHeader.split(';').find(c => c.trim().startsWith(`${SESSION_COOKIE}=`));
+  return match ? match.trim().split('=').slice(1).join('=') : undefined;
+}
+
+/** Read session from cookie string → Redis. Returns null if not authenticated. */
+export async function getAuthPayload(cookieHeader: string | undefined): Promise<AuthPayload | null> {
+  const sessionId = parseCookieHeader(cookieHeader);
   if (!sessionId) return null;
   const session = await getSession(sessionId);
   if (!session) return null;
@@ -25,8 +31,8 @@ export async function getAuthPayload(req: NextRequest): Promise<AuthPayload | nu
 }
 
 /** Same as getAuthPayload but throws AuthError if not authenticated. */
-export async function requireAuth(req: NextRequest): Promise<AuthPayload> {
-  const payload = await getAuthPayload(req);
+export async function requireAuth(cookieHeader: string | undefined): Promise<AuthPayload> {
+  const payload = await getAuthPayload(cookieHeader);
   if (!payload) throw new AuthError('Unauthorized');
   return payload;
 }

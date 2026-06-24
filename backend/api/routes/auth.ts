@@ -2,20 +2,32 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
-import { getUserByEmail, storeRefreshToken, createUser } from '../lib/db/repositories.js';
+import { getUserByEmail, getUserByName, getUserById, createUser } from '../lib/db/repositories.js';
 import { isDbAvailable } from '../lib/db/client.js';
 import { isRedisAvailable } from '../lib/redis-client.js';
 import { generateOtp, storeOtp, sendOtp } from '../lib/otp.js';
 import { getAuthPayload } from '../lib/auth.js';
-import { deleteSession, SESSION_COOKIE } from '../lib/session.js';
+import { createSession, deleteSession, SESSION_COOKIE, SESSION_TTL_SECONDS } from '../lib/session.js';
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET ?? 'abhitrade-dev-secret';
 const ACCESS_TTL = '15m';
 const REFRESH_TTL = 7 * 24 * 60 * 60 * 1000;
+const IS_PROD = process.env.NODE_ENV === 'production';
 
 function signAccess(userId: string, email: string) {
   return jwt.sign({ sub: userId, email }, JWT_SECRET, { expiresIn: ACCESS_TTL });
+}
+
+async function setSessionCookie(res: Response, user: { id: string; email: string; name: string; phone?: string }) {
+  const sessionId = await createSession({ userId: user.id, email: user.email, name: user.name ?? '', phone: user.phone ?? '' });
+  res.cookie(SESSION_COOKIE, sessionId, {
+    httpOnly: true,
+    secure: IS_PROD,
+    sameSite: IS_PROD ? 'strict' : 'lax',
+    maxAge: SESSION_TTL_SECONDS * 1000,
+    path: '/',
+  });
 }
 
 // POST /api/auth/login
@@ -31,10 +43,8 @@ router.post('/login', async (req: Request, res: Response) => {
       if (existing) { res.status(409).json({ error: 'Email already registered' }); return; }
       const hash = await bcrypt.hash(password, 12);
       const user = await createUser({ email, name, password_hash: hash });
+      await setSessionCookie(res, user);
       const accessToken = signAccess(user.id, user.email);
-      const refreshRaw = crypto.randomBytes(40).toString('hex');
-      await storeRefreshToken(user.id, crypto.createHash('sha256').update(refreshRaw).digest('hex'), new Date(Date.now() + REFRESH_TTL));
-      res.cookie('tk_refresh', refreshRaw, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', maxAge: REFRESH_TTL / 1000, path: '/api/auth' });
       res.json({ accessToken, user: { id: user.id, email: user.email, name: user.name } });
       return;
     }
@@ -43,10 +53,8 @@ router.post('/login', async (req: Request, res: Response) => {
     if (!user || !(await bcrypt.compare(password, user.password_hash))) {
       res.status(401).json({ error: 'Invalid email or password' }); return;
     }
+    await setSessionCookie(res, user);
     const accessToken = signAccess(user.id, user.email);
-    const refreshRaw = crypto.randomBytes(40).toString('hex');
-    await storeRefreshToken(user.id, crypto.createHash('sha256').update(refreshRaw).digest('hex'), new Date(Date.now() + REFRESH_TTL));
-    res.cookie('tk_refresh', refreshRaw, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', maxAge: REFRESH_TTL / 1000, path: '/api/auth' });
     res.json({ accessToken, user: { id: user.id, email: user.email, name: user.name, kyc_status: user.kyc_status } });
   } catch (err) {
     console.error('[auth/login]', err);
@@ -109,13 +117,26 @@ router.post('/register', async (req: Request, res: Response) => {
 // POST /api/auth/send-otp
 router.post('/send-otp', async (req: Request, res: Response) => {
   try {
-    const { email, phone } = req.body;
+    const { email, phone, name } = req.body;
+
+    // Sign-in by name: look up user → send OTP to their email
+    if (name && !email && !phone) {
+      if (!(await isDbAvailable())) { res.status(503).json({ error: 'Database unavailable' }); return; }
+      const user = await getUserByName(name.trim());
+      if (!user) { res.json({ ok: true, userExists: false }); return; }
+      const otp = generateOtp();
+      await storeOtp(user.email, otp);
+      const { devOtp } = await sendOtp(user.email, otp, 'email');
+      res.json({ ok: true, userExists: true, ...(devOtp ? { devOtp } : {}) });
+      return;
+    }
+
     const target = email ?? phone;
-    if (!target) { res.status(400).json({ error: 'email or phone is required' }); return; }
+    if (!target) { res.status(400).json({ error: 'email, phone, or name is required' }); return; }
     const otp = generateOtp();
     await storeOtp(target, otp);
     const { devOtp } = await sendOtp(target, otp, email ? 'email' : 'sms');
-    res.json({ ok: true, ...(devOtp ? { devOtp } : {}) });
+    res.json({ ok: true, userExists: true, ...(devOtp ? { devOtp } : {}) });
   } catch (err) {
     console.error('[send-otp]', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -125,14 +146,43 @@ router.post('/send-otp', async (req: Request, res: Response) => {
 // POST /api/auth/verify-otp
 router.post('/verify-otp', async (req: Request, res: Response) => {
   try {
-    const { email, phone, otp } = req.body;
+    const { email, phone, name, otp } = req.body;
     if (!otp) { res.status(400).json({ error: 'otp is required' }); return; }
-    const target = email ?? phone;
-    if (!target) { res.status(400).json({ error: 'email or phone is required' }); return; }
+
+    // Resolve the OTP target (email stored in Redis)
+    let user: Awaited<ReturnType<typeof getUserByEmail>> | null = null;
+    let otpTarget: string;
+
+    if (name && !email && !phone) {
+      // Sign-in by name: look up user → OTP was stored under their email
+      if (!(await isDbAvailable())) { res.status(503).json({ error: 'Database unavailable' }); return; }
+      user = await getUserByName(name.trim());
+      if (!user) { res.status(401).json({ error: 'No account found' }); return; }
+      otpTarget = user.email;
+    } else {
+      otpTarget = email ?? phone;
+      if (!otpTarget) { res.status(400).json({ error: 'email, phone, or name is required' }); return; }
+      if (email && (await isDbAvailable())) user = await getUserByEmail(email);
+    }
+
     const { verifyOtp } = await import('../lib/otp.js');
-    const valid = await verifyOtp(target, otp);
-    if (!valid) { res.status(401).json({ error: 'Invalid or expired OTP' }); return; }
-    res.json({ ok: true });
+    const result = await verifyOtp(otpTarget, otp);
+    if (result !== 'ok') {
+      const msg = result === 'locked' ? 'Too many attempts — request a new OTP'
+                : result === 'expired' ? 'OTP expired — request a new one'
+                : 'Invalid OTP';
+      res.status(401).json({ error: msg });
+      return;
+    }
+
+    // Create session and return user + token so the frontend can complete login
+    if (user) {
+      await setSessionCookie(res, user);
+      const accessToken = signAccess(user.id, user.email);
+      res.json({ ok: true, user: { id: user.id, email: user.email, name: user.name }, accessToken });
+    } else {
+      res.json({ ok: true });
+    }
   } catch (err) {
     console.error('[verify-otp]', err);
     res.status(500).json({ error: 'Internal server error' });

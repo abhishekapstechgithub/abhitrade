@@ -17,13 +17,13 @@ class DarkColors {
 // ─── Light palette ───────────────────────────────────────────────────────────
 class LightColors {
   LightColors._();
-  static const bg       = Color(0xFFF4F1EA);
-  static const surface  = Color(0xFFF4F1EA);
-  static const card     = Color(0xFFFBFBF9);
-  static const border   = Color(0xFFDCD8CF);
-  static const primary  = Color(0xFF131924);
-  static const secondary= Color(0xFF4A5568);
-  static const muted    = Color(0xFF718096);
+  static const bg       = Color(0xFFF5F0E4); // handmade paper
+  static const surface  = Color(0xFFEFE6D3); // slightly aged paper
+  static const card     = Color(0xFFF2EBD8); // warm paper card
+  static const border   = Color(0xFFC4B49A); // ink-stained border
+  static const primary  = Color(0xFF2C2318); // deep ink
+  static const secondary= Color(0xFF5A4A38); // medium ink
+  static const muted    = Color(0xFF8A7A68); // faded ink
 }
 
 // ─── Semantic colours (same in both themes) ──────────────────────────────────

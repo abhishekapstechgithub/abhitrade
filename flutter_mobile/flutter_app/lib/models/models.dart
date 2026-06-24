@@ -1,5 +1,55 @@
 // Central barrel for all models
 
+// ─── Market Breadth ───────────────────────────────────────────────────────────
+class MarketBreadthData {
+  final int advances;
+  final int declines;
+  final double? pcr;
+  final double? vix;
+  final double? vixChange;
+  final double? fiiCash;
+  final double? diiCash;
+  final double? maxPain;
+
+  const MarketBreadthData({
+    this.advances = 0,
+    this.declines = 0,
+    this.pcr,
+    this.vix,
+    this.vixChange,
+    this.fiiCash,
+    this.diiCash,
+    this.maxPain,
+  });
+
+  factory MarketBreadthData.fromJson(Map<String, dynamic> j) => MarketBreadthData(
+    advances:  _i(j['advances']  ?? j['advance']  ?? j['advancingStocks']  ?? 0),
+    declines:  _i(j['declines']  ?? j['decline']  ?? j['decliningStocks']  ?? 0),
+    pcr:       _d(j['pcr']       ?? j['put_call_ratio'] ?? j['putCallRatio']),
+    vix:       _d(j['vix']       ?? j['india_vix'] ?? j['indiaVix']),
+    vixChange: _d(j['vix_change'] ?? j['vixChange'] ?? j['vix_pct']),
+    fiiCash:   _d(j['fii_cash']  ?? j['fiiCash']  ?? j['fii']),
+    diiCash:   _d(j['dii_cash']  ?? j['diiCash']  ?? j['dii']),
+    maxPain:   _d(j['max_pain']  ?? j['maxPain']  ?? j['max_pain_strike']),
+  );
+
+  MarketBreadthData copyWith({double? vix, double? vixChange}) => MarketBreadthData(
+    advances:  advances,
+    declines:  declines,
+    pcr:       pcr,
+    vix:       vix ?? this.vix,
+    vixChange: vixChange ?? this.vixChange,
+    fiiCash:   fiiCash,
+    diiCash:   diiCash,
+    maxPain:   maxPain,
+  );
+
+  static double? _d(dynamic v) =>
+      v == null ? null : (v is num ? v.toDouble() : double.tryParse(v.toString()));
+  static int _i(dynamic v) =>
+      v == null ? 0 : (v is int ? v : int.tryParse(v.toString()) ?? 0);
+}
+
 // ─── User ─────────────────────────────────────────────────────────────────────
 class AppUser {
   final String id;
@@ -136,6 +186,29 @@ class WatchlistItem {
     volume: (j['volume'] ?? 0).toInt(),
   );
 
+  const WatchlistItem.empty()
+      : id = '', symbol = '', company = '', exchange = 'NSE', token = '',
+        instrumentType = 'EQ', ltp = 0, change = 0, changePct = 0,
+        high = 0, low = 0, open = 0, prevClose = 0, volume = 0,
+        sparkline = const [];
+
+  WatchlistItem copyWith({
+    String? id, String? symbol, String? company, String? exchange,
+    String? token, String? instrumentType,
+    double? ltp, double? change, double? changePct,
+    double? high, double? low, double? open, double? prevClose,
+    int? volume, List<double>? sparkline,
+  }) => WatchlistItem(
+    id: id ?? this.id, symbol: symbol ?? this.symbol,
+    company: company ?? this.company, exchange: exchange ?? this.exchange,
+    token: token ?? this.token, instrumentType: instrumentType ?? this.instrumentType,
+    ltp: ltp ?? this.ltp, change: change ?? this.change,
+    changePct: changePct ?? this.changePct, high: high ?? this.high,
+    low: low ?? this.low, open: open ?? this.open,
+    prevClose: prevClose ?? this.prevClose, volume: volume ?? this.volume,
+    sparkline: sparkline ?? this.sparkline,
+  );
+
   bool get isPositive => changePct >= 0;
 }
 
@@ -189,7 +262,7 @@ class Holding {
 
   factory Holding.fromJson(Map<String, dynamic> j) {
     final qty = (j['quantity'] ?? 0).toInt();
-    final avg = (j['avg_price'] ?? j['avgPrice'] ?? 0).toDouble();
+    final avg = (j['average_price'] ?? j['avg_price'] ?? j['avgPrice'] ?? 0).toDouble();
     final ltp = (j['ltp'] ?? 0).toDouble();
     final inv = avg * qty;
     final cur = ltp * qty;
@@ -265,10 +338,12 @@ class Order {
     quantity: (j['quantity'] ?? 0).toInt(),
     filledQty: (j['filled_quantity'] ?? j['filledQty'] ?? 0).toInt(),
     price: (j['price'] ?? 0).toDouble(),
-    avgPrice: (j['avg_price'] ?? j['avgPrice'] ?? 0).toDouble(),
-    placedAt: j['created_at'] != null
-        ? DateTime.tryParse(j['created_at']) ?? DateTime.now()
-        : DateTime.now(),
+    avgPrice: (j['average_price'] ?? j['avg_price'] ?? j['avgPrice'] ?? 0).toDouble(),
+    placedAt: j['placed_at'] != null
+        ? DateTime.tryParse(j['placed_at']) ?? DateTime.now()
+        : j['created_at'] != null
+            ? DateTime.tryParse(j['created_at']) ?? DateTime.now()
+            : DateTime.now(),
     isPaper: j['is_paper'] == true || j['mode'] == 'paper',
   );
 
@@ -293,9 +368,13 @@ class Order {
 
   static ProductType _parseProductType(dynamic p) {
     switch (p?.toString().toUpperCase()) {
-      case 'MIS': return ProductType.mis;
-      case 'NRML': return ProductType.nrml;
-      default: return ProductType.cnc;
+      case 'MIS':
+      case 'INTRADAY':    return ProductType.mis;
+      case 'NRML':
+      case 'CARRYFORWARD': return ProductType.nrml;
+      case 'CNC':
+      case 'DELIVERY':    return ProductType.cnc;
+      default:            return ProductType.cnc;
     }
   }
 

@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -11,12 +10,12 @@ import '../../theme/app_theme.dart';
 import '../../widgets/widgets.dart';
 import '../../models/models.dart';
 import 'stock_detail_sheet.dart';
+import '../orders/place_order_sheet.dart';
 
 // ── Enums ──────────────────────────────────────────────────────────────────────
 enum _SortBy { none, alpha, ltp, changePct, volume }
 enum _DisplayCol { ltp, change, volume }
 enum _Filter { all, gainers, losers }
-enum _OcView { ltpPct, ltpOi, greeks, oiPct }
 
 class WatchlistScreen extends StatefulWidget {
   const WatchlistScreen({super.key});
@@ -31,7 +30,6 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
   bool _sortAsc = false;
   _DisplayCol _displayCol = _DisplayCol.ltp;
   _Filter _filter = _Filter.all;
-  bool _showOC = false;
 
   @override
   void initState() {
@@ -189,14 +187,6 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
         ),
         actions: [
           IconButton(
-            icon: Icon(
-              Icons.table_chart_outlined,
-              color: _showOC ? AppColors.blue : ext.textSecondary,
-            ),
-            tooltip: 'Option Chain',
-            onPressed: () => setState(() => _showOC = !_showOC),
-          ),
-          IconButton(
             icon: Icon(Icons.search_rounded, color: ext.textSecondary),
             onPressed: () => SymbolSearchSheet.show(context),
           ),
@@ -218,9 +208,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
           ),
         ],
       ),
-      body: _showOC
-          ? _OptionChainPanel(onClose: () => setState(() => _showOC = false))
-          : Column(
+      body: Column(
         children: [
           const _PinnedIndicesBar(),
           if (wl.error != null && !wl.loading)
@@ -322,6 +310,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
                                             '${item.symbol} removed from watchlist'),
                                         backgroundColor: AppColors.red,
                                         behavior: SnackBarBehavior.floating,
+                                        duration: const Duration(seconds: 1),
                                       ),
                                     );
                                   },
@@ -342,48 +331,12 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
   // ── Order ──────────────────────────────────────────────────────────────────
   void _openOrder(BuildContext ctx, WatchlistItem item, TradingModeProvider mode,
       {bool sell = false}) {
-    PlaceOrderSheet.show(ctx, item, mode.isPaper,
-        (side, qty, price, tradingMode) async {
-      if (mode.isPaper) {
-        final err = await mode.placePaperOrder(
-            symbol: item.symbol, side: side, quantity: qty, price: price);
-        if (ctx.mounted) {
-          ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
-            content: Text(err.isEmpty
-                ? 'Order placed: ${side.name.toUpperCase()} ${item.symbol} ×$qty'
-                : err),
-            backgroundColor: err.isEmpty ? AppColors.green : AppColors.red,
-            behavior: SnackBarBehavior.floating,
-          ));
-        }
-      } else {
-        try {
-          await context.read<OrdersProvider>().placeOrder(
-                symbol: item.symbol,
-                exchange: item.exchange,
-                side: side,
-                qty: qty,
-                price: price,
-                tradingMode: tradingMode,
-              );
-          if (ctx.mounted) {
-            ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
-              content: Text('Order placed: ${side.name.toUpperCase()} ${item.symbol}'),
-              backgroundColor: AppColors.green,
-              behavior: SnackBarBehavior.floating,
-            ));
-          }
-        } catch (e) {
-          if (ctx.mounted) {
-            ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
-              content: Text('$e'),
-              backgroundColor: AppColors.red,
-              behavior: SnackBarBehavior.floating,
-            ));
-          }
-        }
-      }
-    });
+    PlaceOrderSheet.show(ctx,
+      symbol: item.symbol,
+      exchange: item.exchange,
+      ltp: item.ltp,
+      isBuy: !sell,
+    );
   }
 
   // ── Long-press context menu ────────────────────────────────────────────────
@@ -509,6 +462,7 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
                     content: Text('${item.symbol} removed'),
                     backgroundColor: AppColors.red,
                     behavior: SnackBarBehavior.floating,
+                    duration: const Duration(seconds: 1),
                   ));
                 },
               ),
@@ -1045,12 +999,25 @@ class _PinnedIndicesBarState extends State<_PinnedIndicesBar> {
                             ),
                             if (price != null && price.ltp > 0) ...[
                               const SizedBox(width: 5),
-                              Text(
-                                '${isPos ? '+' : ''}${price.changePct.toStringAsFixed(2)}%',
-                                style: TextStyle(
-                                    color: color,
-                                    fontSize: 11.5,
-                                    fontWeight: FontWeight.w600),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    '${isPos ? '+' : ''}${price.change.toStringAsFixed(2)}',
+                                    style: TextStyle(
+                                        color: color,
+                                        fontSize: 11.5,
+                                        fontWeight: FontWeight.w700),
+                                  ),
+                                  Text(
+                                    '(${isPos ? '+' : ''}${price.changePct.toStringAsFixed(2)}%)',
+                                    style: TextStyle(
+                                        color: color,
+                                        fontSize: 10.0,
+                                        fontWeight: FontWeight.w500),
+                                  ),
+                                ],
                               ),
                             ],
                           ],
@@ -1933,12 +1900,14 @@ class _AddSymbolSheetState extends State<_AddSymbolSheet> {
         content: Text('$sym added to watchlist'),
         backgroundColor: AppColors.green,
         behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 1),
       ));
     } else {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(err),
         backgroundColor: AppColors.red,
         behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 1),
       ));
     }
   }
@@ -2631,650 +2600,6 @@ const _kPopularStocks = [
   {'symbol': 'DIVISLAB',   'exchange': 'NSE', 'name': 'Divi\'s Laboratories'},
 ];
 
-// ── Option Chain Panel ────────────────────────────────────────────────────────
-
-class _OptionChainPanel extends StatefulWidget {
-  final VoidCallback onClose;
-  const _OptionChainPanel({required this.onClose});
-
-  @override
-  State<_OptionChainPanel> createState() => _OptionChainPanelState();
-}
-
-class _OptionChainPanelState extends State<_OptionChainPanel> {
-  static const _availableSymbols = [
-    'NIFTY', 'BANKNIFTY', 'SENSEX', 'FINNIFTY', 'MIDCPNIFTY',
-  ];
-
-  String _symbol       = 'NIFTY';
-  List<String> _expiries = [];
-  String? _expiry;
-  _OcView _view        = _OcView.ltpPct;
-  bool _loading        = false;
-  String? _error;
-  Map<String, dynamic>? _chain;
-  Timer? _refreshTimer;
-
-  final _fmt  = NumberFormat('#,##,##0.##');
-  final _fmtI = NumberFormat('#,##,##0');
-
-  @override
-  void initState() {
-    super.initState();
-    _loadExpiries();
-  }
-
-  @override
-  void dispose() {
-    _refreshTimer?.cancel();
-    super.dispose();
-  }
-
-  Future<void> _loadExpiries() async {
-    setState(() { _loading = true; _error = null; });
-    try {
-      final res = await ApiService.instance.getOptionExpiries(_symbol);
-      final list = (res['expiries'] as List<dynamic>? ?? []).cast<String>();
-      if (!mounted) return;
-      setState(() {
-        _expiries = list;
-        _expiry   = list.isNotEmpty ? list[0] : null;
-        _loading  = false;
-      });
-      if (_expiry != null) _loadChain(initial: true);
-    } catch (_) {
-      if (!mounted) return;
-      setState(() { _error = 'Failed to load expiries'; _loading = false; });
-    }
-  }
-
-  Future<void> _loadChain({bool initial = false}) async {
-    if (_expiry == null) return;
-    if (initial) setState(() { _loading = true; _error = null; });
-    try {
-      final res = await ApiService.instance.getOptionChain(
-        _symbol, _expiry!, strikes: 25,
-      );
-      if (!mounted) return;
-      setState(() { _chain = res; _loading = false; _error = null; });
-      if (initial) {
-        _refreshTimer?.cancel();
-        _refreshTimer = Timer.periodic(const Duration(seconds: 5), (_) {
-          if (mounted) _loadChain();
-        });
-      }
-    } catch (_) {
-      if (!mounted) return;
-      if (initial) setState(() { _error = 'Failed to load option chain'; _loading = false; });
-    }
-  }
-
-  void _changeSymbol(String sym) {
-    if (sym == _symbol) return;
-    _refreshTimer?.cancel();
-    setState(() { _symbol = sym; _expiries = []; _expiry = null; _chain = null; });
-    _loadExpiries();
-  }
-
-  void _changeExpiry(String iso) {
-    if (iso == _expiry) return;
-    _refreshTimer?.cancel();
-    setState(() { _expiry = iso; _chain = null; });
-    _loadChain(initial: true);
-  }
-
-  String _fmtExpiry(String iso) {
-    try {
-      final d = DateTime.parse(iso);
-      const m = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-      return '${d.day} ${m[d.month - 1]} ${d.year}';
-    } catch (_) { return iso; }
-  }
-
-  String _fmtOi(num? v) {
-    if (v == null || v == 0) return '—';
-    if (v >= 10000000) return '${(v / 10000000).toStringAsFixed(1)}Cr';
-    if (v >= 100000)   return '${(v / 100000).toStringAsFixed(1)}L';
-    return _fmtI.format(v);
-  }
-
-  double _chngPct(Map<String, dynamic>? q) {
-    if (q == null) return 0;
-    final ltp   = (q['ltp']   as num?)?.toDouble() ?? 0;
-    final close = (q['close'] as num?)?.toDouble() ?? 0;
-    if (close <= 0 || ltp <= 0) return 0;
-    return (ltp - close) / close * 100;
-  }
-
-  double _oiChngPct(Map<String, dynamic>? q) {
-    if (q == null) return 0;
-    final oi    = (q['oi']       as num?)?.toDouble() ?? 0;
-    final chg   = (q['changeOi'] as num?)?.toDouble() ?? 0;
-    if (oi <= 0) return 0;
-    return chg / oi * 100;
-  }
-
-  List<String> _callLabels() {
-    switch (_view) {
-      case _OcView.ltpPct:  return ['Chng%', 'LTP'];
-      case _OcView.ltpOi:   return ['OI', 'LTP'];
-      case _OcView.greeks:  return ['Delta', 'IV%'];
-      case _OcView.oiPct:   return ['OI Chng%', 'OI'];
-    }
-  }
-
-  List<String> _putLabels() {
-    switch (_view) {
-      case _OcView.ltpPct:  return ['LTP', 'Chng%'];
-      case _OcView.ltpOi:   return ['LTP', 'OI'];
-      case _OcView.greeks:  return ['IV%', 'Delta'];
-      case _OcView.oiPct:   return ['OI', 'OI Chng%'];
-    }
-  }
-
-  List<String> _callCells(Map<String, dynamic>? ce) {
-    if (ce == null) return ['—', '—'];
-    final ltp  = (ce['ltp'] as num?)?.toDouble() ?? 0;
-    final chng = _chngPct(ce);
-    switch (_view) {
-      case _OcView.ltpPct:
-        return [
-          '${chng >= 0 ? '+' : ''}${chng.toStringAsFixed(2)}%',
-          ltp > 0 ? '₹${_fmt.format(ltp)}' : '—',
-        ];
-      case _OcView.ltpOi:
-        return [_fmtOi(ce['oi'] as num?), ltp > 0 ? '₹${_fmt.format(ltp)}' : '—'];
-      case _OcView.greeks:
-        return [
-          (ce['delta'] as num?) != null ? (ce['delta'] as num).toStringAsFixed(3) : '—',
-          (ce['iv'] as num?) != null ? '${(ce['iv'] as num).toStringAsFixed(1)}%' : '—',
-        ];
-      case _OcView.oiPct:
-        final op = _oiChngPct(ce);
-        return ['${op >= 0 ? '+' : ''}${op.toStringAsFixed(1)}%', _fmtOi(ce['oi'] as num?)];
-    }
-  }
-
-  List<String> _putCells(Map<String, dynamic>? pe) {
-    if (pe == null) return ['—', '—'];
-    final ltp  = (pe['ltp'] as num?)?.toDouble() ?? 0;
-    final chng = _chngPct(pe);
-    switch (_view) {
-      case _OcView.ltpPct:
-        return [
-          ltp > 0 ? '₹${_fmt.format(ltp)}' : '—',
-          '${chng >= 0 ? '+' : ''}${chng.toStringAsFixed(2)}%',
-        ];
-      case _OcView.ltpOi:
-        return [ltp > 0 ? '₹${_fmt.format(ltp)}' : '—', _fmtOi(pe['oi'] as num?)];
-      case _OcView.greeks:
-        return [
-          (pe['iv']    as num?) != null ? '${(pe['iv']    as num).toStringAsFixed(1)}%' : '—',
-          (pe['delta'] as num?) != null ? (pe['delta'] as num).toStringAsFixed(3) : '—',
-        ];
-      case _OcView.oiPct:
-        final op = _oiChngPct(pe);
-        return [_fmtOi(pe['oi'] as num?), '${op >= 0 ? '+' : ''}${op.toStringAsFixed(1)}%'];
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final ext  = context.appColors;
-    final rows = (_chain?['rows'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
-    final spot = (_chain?['spot'] as num?)?.toDouble() ?? 0;
-
-    return Column(
-      children: [
-        // ── Tab header ────────────────────────────────────────────────────
-        Container(
-          color: ext.surface,
-          padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
-          child: Row(
-            children: [
-              GestureDetector(
-                onTap: widget.onClose,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  child: Text('Watchlist',
-                    style: TextStyle(color: ext.textSecondary, fontSize: 14, fontWeight: FontWeight.w500)),
-                ),
-              ),
-              Container(
-                decoration: const BoxDecoration(
-                  border: Border(bottom: BorderSide(color: AppColors.blue, width: 2.5)),
-                ),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                child: const Text('Option Chain',
-                  style: TextStyle(color: AppColors.blue, fontSize: 14, fontWeight: FontWeight.w600)),
-              ),
-              const Spacer(),
-              IconButton(
-                icon: Icon(Icons.open_in_new_rounded, size: 17, color: ext.textMuted),
-                onPressed: null,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-              ),
-              IconButton(
-                icon: Icon(Icons.close_rounded, size: 20, color: ext.textMuted),
-                onPressed: widget.onClose,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-              ),
-              const SizedBox(width: 6),
-            ],
-          ),
-        ),
-
-        // ── Symbol + Expiry selectors ─────────────────────────────────────
-        Container(
-          color: ext.surface,
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
-          child: Row(
-            children: [
-              _OcDropdown(
-                value: _symbol,
-                items: _availableSymbols,
-                onChanged: _changeSymbol,
-                ext: ext,
-              ),
-              const SizedBox(width: 8),
-              _OcDropdown(
-                value: _expiry != null ? _fmtExpiry(_expiry!) : '—',
-                items: _expiries.map(_fmtExpiry).toList(),
-                onChanged: (label) {
-                  final idx = _expiries.indexWhere((e) => _fmtExpiry(e) == label);
-                  if (idx != -1) _changeExpiry(_expiries[idx]);
-                },
-                ext: ext,
-              ),
-              const Spacer(),
-              if (_loading && _chain != null)
-                const SizedBox(
-                  width: 14, height: 14,
-                  child: CircularProgressIndicator(strokeWidth: 1.5, color: AppColors.blue),
-                ),
-            ],
-          ),
-        ),
-
-        Divider(height: 1, thickness: 1, color: ext.border),
-
-        // ── Column headers ────────────────────────────────────────────────
-        if (!_loading || _chain != null) ...[
-          Container(
-            color: ext.surface,
-            padding: const EdgeInsets.symmetric(vertical: 5),
-            child: Row(
-              children: [
-                Expanded(
-                  flex: 4,
-                  child: Center(
-                    child: Text('CALL',
-                      style: TextStyle(color: ext.textMuted, fontSize: 10,
-                          fontWeight: FontWeight.w700, letterSpacing: 0.8)),
-                  ),
-                ),
-                _OcViewButton(view: _view, onChanged: (v) => setState(() => _view = v), ext: ext),
-                Expanded(
-                  flex: 4,
-                  child: Center(
-                    child: Text('PUT',
-                      style: TextStyle(color: ext.textMuted, fontSize: 10,
-                          fontWeight: FontWeight.w700, letterSpacing: 0.8)),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: Row(
-              children: [
-                Expanded(flex: 2, child: Text(_callLabels()[0], textAlign: TextAlign.center,
-                    style: TextStyle(color: ext.textMuted, fontSize: 9))),
-                Expanded(flex: 2, child: Text(_callLabels()[1], textAlign: TextAlign.center,
-                    style: TextStyle(color: ext.textMuted, fontSize: 9))),
-                const SizedBox(width: 60),
-                Expanded(flex: 2, child: Text(_putLabels()[0], textAlign: TextAlign.center,
-                    style: TextStyle(color: ext.textMuted, fontSize: 9))),
-                Expanded(flex: 2, child: Text(_putLabels()[1], textAlign: TextAlign.center,
-                    style: TextStyle(color: ext.textMuted, fontSize: 9))),
-              ],
-            ),
-          ),
-          Divider(height: 1, thickness: 1, color: ext.border),
-        ],
-
-        // ── Table body ───────────────────────────────────────────────────
-        Expanded(
-          child: _loading && _chain == null
-              ? const Center(child: CircularProgressIndicator(color: AppColors.blue, strokeWidth: 2))
-              : _error != null
-                  ? Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.error_outline, color: AppColors.red, size: 36),
-                          const SizedBox(height: 8),
-                          Text(_error!, style: TextStyle(color: ext.textSecondary, fontSize: 13)),
-                          const SizedBox(height: 12),
-                          ElevatedButton.icon(
-                            onPressed: _loadExpiries,
-                            icon: const Icon(Icons.refresh, size: 16),
-                            label: const Text('Retry'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.blue,
-                              foregroundColor: Colors.white,
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
-                  : rows.isEmpty
-                      ? Center(
-                          child: Text('No option data available',
-                            style: TextStyle(color: ext.textMuted, fontSize: 13)))
-                      : Stack(
-                          children: [
-                            ListView.builder(
-                              padding: const EdgeInsets.only(bottom: 64),
-                              itemCount: rows.length,
-                              itemBuilder: (_, i) =>
-                                  _buildRow(rows[i], spot, ext, i, rows),
-                            ),
-                            Positioned(
-                              bottom: 12,
-                              left: 0,
-                              right: 0,
-                              child: Center(
-                                child: ElevatedButton.icon(
-                                  onPressed: () {},
-                                  icon: const Icon(Icons.add, size: 15),
-                                  label: const Text('CREATE STRATEGY',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w800,
-                                      letterSpacing: 0.6,
-                                    )),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: AppColors.blue,
-                                    foregroundColor: Colors.white,
-                                    shape: const StadiumBorder(),
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 20, vertical: 11),
-                                    elevation: 4,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildRow(
-    Map<String, dynamic> row,
-    double spot,
-    dynamic ext,
-    int i,
-    List<Map<String, dynamic>> allRows,
-  ) {
-    final strike = (row['strike'] as num).toDouble();
-    final isAtm  = row['isAtm'] == true;
-    final ce     = row['ce'] as Map<String, dynamic>?;
-    final pe     = row['pe'] as Map<String, dynamic>?;
-    final cItm   = spot > 0 && strike < spot;
-    final pItm   = spot > 0 && strike > spot;
-    final isDark = context.isDark;
-
-    final callCells = _callCells(ce);
-    final putCells  = _putCells(pe);
-
-    final showSpotLine = spot > 0 &&
-        i > 0 &&
-        (allRows[i - 1]['strike'] as num).toDouble() < spot &&
-        strike >= spot;
-
-    // Determine text colors by view
-    Color callLeftColor  = ext.textSecondary;
-    Color callRightColor = ext.textPrimary;
-    Color putLeftColor   = ext.textPrimary;
-    Color putRightColor  = ext.textSecondary;
-    if (_view == _OcView.ltpPct) {
-      final cc = _chngPct(ce);
-      callLeftColor = cc >= 0 ? AppColors.green : AppColors.red;
-      final pc = _chngPct(pe);
-      putRightColor = pc >= 0 ? AppColors.green : AppColors.red;
-    } else if (_view == _OcView.oiPct) {
-      callLeftColor = _oiChngPct(ce) >= 0 ? AppColors.green : AppColors.red;
-      putRightColor = _oiChngPct(pe) >= 0 ? AppColors.green : AppColors.red;
-    }
-
-    // ITM backgrounds
-    final cItmBg = isDark ? const Color(0xFF221400) : const Color(0xFFFFF3E0);
-    final pItmBg = isDark ? const Color(0xFF00180A) : const Color(0xFFECFDF5);
-    final defBg  = ext.bg;
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Spot price separator line
-        if (showSpotLine)
-          Container(
-            color: AppColors.red.withOpacity(0.12),
-            padding: const EdgeInsets.symmetric(vertical: 3),
-            child: Row(
-              children: [
-                const Expanded(child: Divider(color: AppColors.red, thickness: 0.5)),
-                const SizedBox(width: 6),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: AppColors.red,
-                    borderRadius: BorderRadius.circular(3),
-                  ),
-                  child: Text(
-                    _fmt.format(spot),
-                    style: const TextStyle(
-                      color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                const Expanded(child: Divider(color: AppColors.red, thickness: 0.5)),
-              ],
-            ),
-          ),
-        IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Call left
-              Expanded(
-                flex: 2,
-                child: Container(
-                  color: cItm ? cItmBg : defBg,
-                  padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 3),
-                  alignment: Alignment.centerRight,
-                  child: Text(callCells[0],
-                    style: TextStyle(color: callLeftColor, fontSize: 10.5, fontWeight: FontWeight.w500)),
-                ),
-              ),
-              // Call right (LTP)
-              Expanded(
-                flex: 2,
-                child: Container(
-                  color: cItm ? cItmBg : defBg,
-                  padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 3),
-                  alignment: Alignment.centerRight,
-                  child: Text(callCells[1],
-                    style: TextStyle(color: callRightColor, fontSize: 11, fontWeight: FontWeight.w600)),
-                ),
-              ),
-              // Strike
-              Container(
-                width: 60,
-                color: isAtm
-                    ? (isDark ? const Color(0xFF1A3A5C) : const Color(0xFFEBF2FF))
-                    : ext.surface,
-                alignment: Alignment.center,
-                padding: const EdgeInsets.symmetric(vertical: 9),
-                child: Text(
-                  _fmtI.format(strike),
-                  style: TextStyle(
-                    color: isAtm ? AppColors.blue : ext.textPrimary,
-                    fontSize: 11,
-                    fontWeight: isAtm ? FontWeight.w700 : FontWeight.w600,
-                  ),
-                ),
-              ),
-              // Put left (LTP)
-              Expanded(
-                flex: 2,
-                child: Container(
-                  color: pItm ? pItmBg : defBg,
-                  padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 3),
-                  alignment: Alignment.centerLeft,
-                  child: Text(putCells[0],
-                    style: TextStyle(color: putLeftColor, fontSize: 11, fontWeight: FontWeight.w600)),
-                ),
-              ),
-              // Put right
-              Expanded(
-                flex: 2,
-                child: Container(
-                  color: pItm ? pItmBg : defBg,
-                  padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 3),
-                  alignment: Alignment.centerLeft,
-                  child: Text(putCells[1],
-                    style: TextStyle(color: putRightColor, fontSize: 10.5, fontWeight: FontWeight.w500)),
-                ),
-              ),
-            ],
-          ),
-        ),
-        Divider(height: 0.5, thickness: 0.5, color: ext.border.withOpacity(0.4)),
-      ],
-    );
-  }
-}
-
-// ── Option Chain helper widgets ───────────────────────────────────────────────
-
-class _OcDropdown extends StatelessWidget {
-  final String value;
-  final List<String> items;
-  final ValueChanged<String> onChanged;
-  final dynamic ext;
-
-  const _OcDropdown({
-    required this.value,
-    required this.items,
-    required this.onChanged,
-    required this.ext,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (items.isEmpty) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-        decoration: BoxDecoration(
-          border: Border.all(color: ext.border),
-          borderRadius: BorderRadius.circular(6),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(value, style: TextStyle(color: ext.textSecondary, fontSize: 13, fontWeight: FontWeight.w600)),
-            const SizedBox(width: 4),
-            Icon(Icons.keyboard_arrow_down, size: 16, color: ext.textMuted),
-          ],
-        ),
-      );
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-      decoration: BoxDecoration(
-        border: Border.all(color: ext.border),
-        borderRadius: BorderRadius.circular(6),
-        color: ext.surface,
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<String>(
-          value: items.contains(value) ? value : items.first,
-          isDense: true,
-          dropdownColor: ext.surface,
-          style: TextStyle(color: ext.textPrimary, fontSize: 13, fontWeight: FontWeight.w600),
-          icon: Icon(Icons.keyboard_arrow_down, size: 17, color: ext.textMuted),
-          items: items.map((s) => DropdownMenuItem(
-            value: s,
-            child: Text(s, style: TextStyle(color: ext.textPrimary, fontSize: 13)),
-          )).toList(),
-          onChanged: (v) { if (v != null) onChanged(v); },
-        ),
-      ),
-    );
-  }
-}
-
-class _OcViewButton extends StatelessWidget {
-  final _OcView view;
-  final ValueChanged<_OcView> onChanged;
-  final dynamic ext;
-
-  const _OcViewButton({required this.view, required this.onChanged, required this.ext});
-
-  static const _labels = <_OcView, String>{
-    _OcView.ltpPct: 'LTP%',
-    _OcView.ltpOi:  'LTP & OI',
-    _OcView.greeks: 'Greeks',
-    _OcView.oiPct:  'OI%',
-  };
-
-  @override
-  Widget build(BuildContext context) {
-    return PopupMenuButton<_OcView>(
-      initialValue: view,
-      color: ext.surface,
-      onSelected: onChanged,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: BorderSide(color: ext.border),
-      ),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          border: Border.all(color: ext.border),
-          borderRadius: BorderRadius.circular(6),
-          color: ext.surface,
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(_labels[view]!,
-              style: const TextStyle(color: AppColors.blue, fontSize: 11, fontWeight: FontWeight.w700)),
-            const SizedBox(width: 3),
-            const Icon(Icons.keyboard_arrow_down, size: 15, color: AppColors.blue),
-          ],
-        ),
-      ),
-      itemBuilder: (_) => _OcView.values.map((v) => PopupMenuItem(
-        value: v,
-        child: Text(_labels[v]!,
-          style: TextStyle(
-            color: v == view ? AppColors.blue : ext.textPrimary,
-            fontSize: 13,
-            fontWeight: v == view ? FontWeight.w600 : FontWeight.w400,
-          ),
-        ),
-      )).toList(),
-    );
-  }
-}
-
 // ── Orders provider extension ──────────────────────────────────────────────────
 extension OrdersProviderX on OrdersProvider {
   Future<void> placeOrder({
@@ -3290,10 +2615,9 @@ extension OrdersProviderX on OrdersProvider {
       exchange: exchange,
       transactionType: side == OrderSide.buy ? 'BUY' : 'SELL',
       orderType: price > 0 ? 'LIMIT' : 'MARKET',
-      productType: 'CNC',
+      productType: 'DELIVERY',
       quantity: qty,
       price: price > 0 ? price : null,
-      isPaper: tradingMode == 'paper',
     );
     await fetch(tradingMode);
   }

@@ -1,20 +1,19 @@
 import { Router, Request, Response } from 'express';
 import { buildOptionChain, getOptionExpiries, diffChain } from '../lib/optionchain/service.js';
-import { pushTicks, setSpot, getQuote, writeGreeks, type GreeksTick } from '../lib/optionchain/market-data.js';
-import { getStrikes } from '../lib/optionchain/security-master.js';
-import { getAngelSession } from '../lib/angelone/auth.js';
-import { getOptionGreeks } from '../lib/angelone/client.js';
+import { pushTicks, setSpot, getQuote } from '../lib/optionchain/market-data.js';
 import { redis } from '../lib/redis-client.js';
 import type { OptionChainResponse } from '../lib/optionchain/types.js';
 
+// ── Univest date conversion ───────────────────────────────────────────────────
+// Univest Exp = Unix timestamp (seconds) of the same calendar date but 10 years
+// earlier at midnight IST (UTC+5:30).  Verified: 1467225000 → 30 JUN 2026.
+function toUnivestExp(yyyymmdd: string): number {
+  const [y, m, d] = yyyymmdd.split('-').map(Number);
+  return Math.floor(Date.UTC(y - 10, m - 1, d) / 1000) - 19800; // -19800 = -5.5h IST offset
+}
+
 const router = Router();
 const EXPIRY_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-function toAngelExpiry(yyyymmdd: string): string {
-  const [y, m, d] = yyyymmdd.split('-');
-  const MONTHS = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
-  return `${d}${MONTHS[Number(m) - 1]}${y}`;
-}
 
 // GET /api/optionchain
 router.get('/', async (req: Request, res: Response) => {
@@ -54,58 +53,30 @@ router.get('/expiries', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/optionchain/greeks
-router.get('/greeks', async (req: Request, res: Response) => {
-  const symbol = (req.query.symbol as string ?? '').trim().toUpperCase();
+// GET /api/optionchain/univest?expiry=2026-06-30
+// Proxies the Univest OptChainGeeks API for NIFTY (UnderlyingSId=13).
+// Date conversion: Univest Exp = Unix ts of (date - 10 years) at midnight IST.
+router.get('/univest', async (req: Request, res: Response) => {
   const expiry = (req.query.expiry as string ?? '').trim();
-  if (!symbol || !expiry) { res.status(400).json({ error: 'symbol and expiry (YYYY-MM-DD) are required' }); return; }
-
-  const greeksKey = `oc:greeks:${symbol}:${expiry}`;
-  const GREEKS_CACHE_TTL = 180;
+  if (!expiry || !EXPIRY_RE.test(expiry)) {
+    res.status(400).json({ error: 'expiry is required (YYYY-MM-DD)' }); return;
+  }
+  const exp = toUnivestExp(expiry);
   try {
-    const cached = await redis.get(greeksKey);
-    if (cached) { res.set('X-Greeks-Source', 'cache').json(JSON.parse(cached)); return; }
-  } catch { /* fall through */ }
-
-  const apiKey = process.env.ANGELONE_API_KEY ?? '';
-  const clientId = process.env.ANGELONE_CLIENT_ID ?? '';
-  const password = process.env.ANGELONE_PASSWORD ?? '';
-  const totpSecret = process.env.ANGELONE_TOTP_SECRET ?? '';
-  if (!apiKey || !clientId || !password || !totpSecret) {
-    res.status(503).json({ error: 'Angel One credentials not configured', source: 'unavailable', symbol, expiry, rows: [] }); return;
+    const upstream = await fetch('https://livepub.univest.in/DataPub/api/SData/OptChainGeeks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ Data: { UnderlyingSId: 13, Exch: 1, Exp: exp, Count: 1, Seg: '0' } }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!upstream.ok) {
+      res.status(502).json({ error: `Univest API error: HTTP ${upstream.status}` }); return;
+    }
+    const raw = await upstream.json() as { code: number; remarks: string; data: unknown };
+    res.set('Cache-Control', 'no-store').json(raw);
+  } catch (err) {
+    res.status(502).json({ error: 'Failed to reach Univest API', detail: (err as Error).message });
   }
-
-  let session: { accessToken: string; feedToken: string };
-  try { session = await getAngelSession(apiKey, clientId, password, totpSecret); }
-  catch (err) { res.status(502).json({ error: 'Could not authenticate with Angel One', detail: (err as Error).message, source: 'unavailable', symbol, expiry, rows: [] }); return; }
-
-  const angelExpiry = toAngelExpiry(expiry);
-  let rawGreeks: Awaited<ReturnType<typeof getOptionGreeks>>;
-  try { rawGreeks = await getOptionGreeks(apiKey, session.accessToken, symbol, angelExpiry); }
-  catch (err) { res.status(502).json({ error: 'Angel One Greeks API failed', detail: (err as Error).message, source: 'unavailable', symbol, expiry, rows: [] }); return; }
-
-  if (!rawGreeks?.length) { res.json({ symbol, expiry, source: 'unavailable', written: 0, rows: [] }); return; }
-
-  const [strikePairs, spotData] = await Promise.all([getStrikes(symbol, expiry), (await import('../lib/optionchain/market-data.js')).getSpot(symbol)]);
-
-  const ticks: GreeksTick[] = [];
-  const rows: Array<Record<string, unknown>> = [];
-  for (const g of rawGreeks) {
-    const strike = parseFloat(g.strikePrice), optType = g.optionType as 'CE' | 'PE';
-    const iv = parseFloat(g.impliedVolatility), delta = parseFloat(g.delta), gamma = parseFloat(g.gamma), theta = parseFloat(g.theta), vega = parseFloat(g.vega), volume = parseFloat(g.tradeVolume);
-    rows.push({ strike, optionType: optType, iv, delta, gamma, theta, vega, volume });
-    const pair = strikePairs?.get(strike);
-    if (!pair) continue;
-    const token = optType === 'CE' ? pair.ceToken : pair.peToken;
-    const tradingSymbol = optType === 'CE' ? pair.ceSymbol : pair.peSymbol;
-    if (!token) continue;
-    ticks.push({ token, tradingSymbol, strike, optType, spot: spotData.ltp, iv, delta, gamma, theta, vega, volume });
-  }
-
-  const written = await writeGreeks(ticks);
-  const result = { symbol, expiry, source: 'live' as const, written, rows };
-  try { await redis.set(greeksKey, JSON.stringify(result), 'EX', GREEKS_CACHE_TTL); } catch { /* non-fatal */ }
-  res.set({ 'Cache-Control': `public, s-maxage=${GREEKS_CACHE_TTL}`, 'X-Greeks-Source': 'live', 'X-Greeks-Written': String(written) }).json(result);
 });
 
 // GET /api/optionchain/quote?token=1001

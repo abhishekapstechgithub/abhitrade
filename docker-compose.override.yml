@@ -1,12 +1,14 @@
 # ────────────────────────────────────────────────────────────────────────────
-#  TradeKaro — Development Override
+#  AbhiTrade — Development Override (monorepo)
 #
 #  Dev start:   docker-compose up -d
 #  Prod start:  docker-compose -f docker-compose.yml up -d --build
 #
-#  Traffic:  http://localhost  →  nginx:80  →  app:3000 (next dev)
-#  Port 3000 is NOT exposed directly — nginx is the only entry point.
-#  Certbot is disabled; SSL is production-only.
+#  Traffic:  http://localhost  →  nginx:80
+#              /api/*  →  backend-api:3001  (Express)
+#              /*      →  app:3000          (Next.js dev)
+#
+#  Port 3000 and 3001 are internal only — nginx is the only entry point.
 # ────────────────────────────────────────────────────────────────────────────
 
 services:
@@ -14,48 +16,27 @@ services:
   # ── Next.js dev server ────────────────────────────────────────────────────
   app:
     build:
-      context: .
+      context: ./frontend
       dockerfile: Dockerfile.dev
     container_name: abhitrade-app-dev
-    # Port 3000 is internal only — access via http://localhost through nginx
     expose:
       - '3000'
     volumes:
-      # Single root mount — reliable on Docker Desktop + WSL2.
-      # Individual per-directory mounts silently fail on Windows filesystem paths.
-      - .:/app
-      # Keep the container's node_modules (npm ci'd in the image)
+      - ./frontend:/app
       - /app/node_modules
-      # Preserve Next.js compilation cache between restarts
       - nextjs_cache:/app/.next
-      - uploads:/app/tmp/uploads
     environment:
       - NODE_ENV=development
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB_LIVE=abhitrade_live
-      - POSTGRES_USER=${POSTGRES_USER:-tradekaro}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-tradekaro}
+      - BACKEND_API_URL=http://backend-api:3001
       - NEXT_PUBLIC_API_URL=http://localhost/api
-      - JWT_SECRET=${JWT_SECRET:-abhitrade-dev-secret}
-      - UPLOAD_DIR=/app/tmp/uploads
       - NEXT_TELEMETRY_DISABLED=1
-      - ANGELONE_API_KEY=${ANGELONE_API_KEY:-}
-      - ANGELONE_CLIENT_ID=${ANGELONE_CLIENT_ID:-}
-      - ANGELONE_PASSWORD=${ANGELONE_PASSWORD:-}
-      - ANGELONE_TOTP_SECRET=${ANGELONE_TOTP_SECRET:-}
     depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
+      backend-api:
         condition: service_healthy
     restart: unless-stopped
     stop_grace_period: 5s
     healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://localhost:3000/api/health || exit 1']
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3000/ || exit 1']
       interval: 30s
       timeout: 10s
       retries: 5
@@ -64,18 +45,23 @@ services:
       - proxy-net
       - app-net
 
+  # ── Express backend — hot reload via tsx watch ────────────────────────────
+  backend-api:
+    command: ["node_modules/.bin/tsx", "watch", "server.ts"]
+    volumes:
+      - ./backend/api:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+
   # ── Nginx — local HTTP-only reverse proxy ─────────────────────────────────
   nginx:
-    # Add the local dev config; override command to skip the SSL cert check.
-    # http.conf (from docker-compose.yml) is still mounted but its server block
-    # only responds to abhitrade.online — requests to localhost hit local.conf.
     volumes:
-      # Replace the default nginx image conf (also server_name localhost) with
-      # our local proxy config to avoid "conflicting server name" warnings.
       - ./nginx/conf.d/local.conf:/etc/nginx/conf.d/default.conf:ro
     command: nginx -g 'daemon off;'
     depends_on:
       - app
+      - backend-api
 
   # ── Certbot — disabled in local dev ───────────────────────────────────────
   certbot:

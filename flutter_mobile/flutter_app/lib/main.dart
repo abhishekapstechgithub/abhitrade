@@ -6,6 +6,8 @@ import 'providers/app_provider.dart';
 import 'screens/main_screen.dart';
 // ignore: unused_import
 import 'screens/login_screen.dart';
+import 'screens/splash_screen.dart';
+import 'widgets/paper_texture.dart';
 import 'features/strategy/data/repositories/strategy_repository_impl.dart';
 import 'features/strategy/presentation/providers/strategy_provider.dart';
 
@@ -43,7 +45,17 @@ class AbhiTradeApp extends StatelessWidget {
           theme: AppTheme.light,
           darkTheme: AppTheme.dark,
           themeMode: theme.mode,
-          home: const _RootGuard(),
+          home: const SplashScreen(),
+          builder: (context, child) {
+            final isDark = Theme.of(context).brightness == Brightness.dark;
+            final scaled = MediaQuery(
+              data: MediaQuery.of(context).copyWith(
+                textScaler: const TextScaler.linear(0.75),
+              ),
+              child: child!,
+            );
+            return isDark ? scaled : PaperBackground(child: scaled);
+          },
         ),
       ),
     );
@@ -56,7 +68,6 @@ class _RootGuard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
-    // Show main app if logged in, otherwise login screen
     if (auth.isLoggedIn) return const MainScreen();
     return const LoginScreen();
   }

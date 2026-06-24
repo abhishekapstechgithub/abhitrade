@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'dart:io';
 import '../config/constants.dart';
 
 class QuoteUpdate {
@@ -50,8 +50,8 @@ double _d(dynamic v) =>
 int _i(dynamic v) =>
     (v is int) ? v : int.tryParse(v.toString()) ?? 0;
 
-/// Connects to /api/market-stream (SSE) and broadcasts live quote ticks.
-/// Shared singleton — one SSE connection for the whole app.
+/// Connects to /api/market-stream (SSE) using dart:io for true unbuffered
+/// streaming. Shared singleton — one SSE connection for the whole app.
 class LivePriceService {
   LivePriceService._();
   static final LivePriceService instance = LivePriceService._();
@@ -62,26 +62,31 @@ class LivePriceService {
   Stream<Map<String, QuoteUpdate>> get stream => _controller.stream;
 
   final Set<String> _symbols = {};
-  http.Client? _client;
-  StreamSubscription<String>? _lineSub;
+  HttpClient? _httpClient;
+  StreamSubscription? _lineSub;
   Timer? _reconnectTimer;
   bool _connecting = false;
 
-  /// Add [symbols] to live subscription (format: "NSE:RELIANCE", "BSE:SENSEX").
-  /// Reconnects with the full merged set if new symbols are added.
+  // Accumulates partial SSE lines across TCP chunks
+  String _lineBuffer = '';
+
   void subscribe(Iterable<String> symbols) {
     final normalised = symbols.map((s) => s.toUpperCase()).toSet();
-    if (_symbols.containsAll(normalised) && _client != null) return;
+    final isNewSymbols = !_symbols.containsAll(normalised);
     _symbols.addAll(normalised);
-    _connect();
+    // Reconnect if new symbols were added OR if the connection dropped
+    if (isNewSymbols || _httpClient == null) {
+      _connecting = false;
+      _connect();
+    }
   }
 
-  /// Replace the entire symbol set and force a reconnect.
+  // Only call this when you intentionally want to replace the entire symbol set
+  // (e.g. a standalone screen that owns its own SSE subscription lifecycle).
   void replaceSubscription(Iterable<String> symbols) {
     _symbols
       ..clear()
       ..addAll(symbols.map((s) => s.toUpperCase()));
-    // Reset flag so _connect() always proceeds for an explicit replace.
     _connecting = false;
     _connect();
   }
@@ -92,27 +97,31 @@ class LivePriceService {
 
     _reconnectTimer?.cancel();
     _lineSub?.cancel();
-    _client?.close();
-    _client = null;
+    _httpClient?.close(force: true);
+    _httpClient = null;
+    _lineBuffer = '';
 
-    // apiBase = "https://abhitrade.com/api" → strip "/api" for root
-    final base = AppConstants.apiBase.replaceFirst(RegExp(r'/api$'), '');
-    final uri = Uri.parse('$base/api/market-stream')
+    final uri = Uri.parse('${AppConstants.apiBase}/api/market-stream')
         .replace(queryParameters: {'symbols': _symbols.join(',')});
 
-    final client = http.Client();
-    _client = client;
-    final req = http.Request('GET', uri)
-      ..headers['Accept'] = 'text/event-stream'
-      ..headers['Cache-Control'] = 'no-cache';
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 10)
+      ..autoUncompress = false; // keep raw bytes for streaming
+    _httpClient = client;
 
-    client.send(req).then((res) {
+    client.getUrl(uri).then((req) {
+      req.headers
+        ..set(HttpHeaders.acceptHeader, 'text/event-stream')
+        ..set(HttpHeaders.cacheControlHeader, 'no-cache')
+        ..set('X-Accel-Buffering', 'no'); // disable nginx buffering
+      return req.close();
+    }).then((res) {
       _connecting = false;
-      _lineSub = res.stream
+      // Decode bytes → string manually so we can handle partial chunks
+      _lineSub = res
           .transform(utf8.decoder)
-          .transform(const LineSplitter())
           .listen(
-            _onLine,
+            _onChunk,
             onError: (_) => _scheduleReconnect(),
             onDone: _scheduleReconnect,
             cancelOnError: true,
@@ -121,6 +130,17 @@ class LivePriceService {
       _connecting = false;
       _scheduleReconnect();
     });
+  }
+
+  // Process raw SSE text that may contain multiple partial lines per TCP chunk.
+  void _onChunk(String chunk) {
+    _lineBuffer += chunk;
+    // Split on newlines but keep the last (potentially incomplete) fragment
+    final parts = _lineBuffer.split('\n');
+    _lineBuffer = parts.removeLast(); // incomplete tail
+    for (final line in parts) {
+      _onLine(line.trimRight());
+    }
   }
 
   void _onLine(String line) {
@@ -146,7 +166,7 @@ class LivePriceService {
   void _scheduleReconnect() {
     if (_controller.isClosed) return;
     _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(const Duration(seconds: 5), () {
+    _reconnectTimer = Timer(const Duration(seconds: 2), () {
       _connecting = false;
       _connect();
     });
@@ -155,7 +175,7 @@ class LivePriceService {
   void dispose() {
     _reconnectTimer?.cancel();
     _lineSub?.cancel();
-    _client?.close();
+    _httpClient?.close(force: true);
     _controller.close();
   }
 }

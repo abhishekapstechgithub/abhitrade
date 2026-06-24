@@ -36,7 +36,10 @@ class _OrdersScreenState extends State<OrdersScreen>
     _orderTab   = TabController(length: _orderTabs.length, vsync: this);
     _sectionTab.addListener(() => setState(() {}));
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final mode = context.read<TradingModeProvider>().mode;
+      final trading = context.read<TradingModeProvider>();
+      final mode    = trading.mode;
+      // Merge any locally-placed orders first so they show while API loads
+      context.read<OrdersProvider>().mergeLocalOrders(trading.localOrdersAsOrders);
       context.read<OrdersProvider>().fetch(mode);
       context.read<PortfolioProvider>().fetch(mode);
     });

@@ -32,7 +32,7 @@ services:
       POSTGRES_DB:       postgres
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./lib/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+      - ./backend/api/lib/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
       - ./scripts/init-databases.sh:/docker-entrypoint-initdb.d/00_init.sh:ro
       - ./scripts/migrate-password-nullable.sql:/docker-entrypoint-initdb.d/migrate-password-nullable.sql:ro
       - ./scripts/migrate-market-movers.sql:/docker-entrypoint-initdb.d/migrate-market-movers.sql:ro
@@ -43,9 +43,9 @@ services:
       - ./scripts/migrate-angle-scrip.sql:/docker-entrypoint-initdb.d/migrate-angle-scrip.sql:ro
       - ./scripts/migrate-angle-scrip-ltp.sql:/docker-entrypoint-initdb.d/migrate-angle-scrip-ltp.sql:ro
       - ./scripts/migrate-angle-scrip-bhavcopy.sql:/docker-entrypoint-initdb.d/migrate-angle-scrip-bhavcopy.sql:ro
-      - ./strategy-api/migrations/001_strategies.sql:/docker-entrypoint-initdb.d/migrate-001-strategies.sql:ro
-      - ./strategy-api/migrations/002_paper_trading.sql:/docker-entrypoint-initdb.d/migrate-002-paper-trading.sql:ro
-      - ./strategy-api/migrations/003_option_greeks_strategies.sql:/docker-entrypoint-initdb.d/migrate-003-option-greeks.sql:ro
+      - ./backend/strategy-api/migrations/001_strategies.sql:/docker-entrypoint-initdb.d/migrate-001-strategies.sql:ro
+      - ./backend/strategy-api/migrations/002_paper_trading.sql:/docker-entrypoint-initdb.d/migrate-002-paper-trading.sql:ro
+      - ./backend/strategy-api/migrations/003_option_greeks_strategies.sql:/docker-entrypoint-initdb.d/migrate-003-option-greeks.sql:ro
     restart: unless-stopped
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-tradekaro} -d abhitrade_live']
@@ -125,7 +125,7 @@ services:
   # Port 8000 is NOT exposed to the host; access is through nginx only.
   strategy-api:
     build:
-      context: ./strategy-api
+      context: ./backend/strategy-api
       dockerfile: Dockerfile
     container_name: abhitrade-strategy-api
     expose:
@@ -166,22 +166,22 @@ services:
           memory: 512m
           cpus: '0.5'
 
-  # ── Next.js App — internal only, fronted by Nginx ─────────────────────────
-  # Port 3000 is NOT exposed to the host. All traffic comes through nginx.
-  app:
+  # ── Express Backend API — internal only, fronted by Nginx ──────────────────
+  # Port 3001 is NOT exposed to the host. All /api/* traffic comes through nginx.
+  backend-api:
     build:
-      context: .
+      context: ./backend/api
       dockerfile: Dockerfile
-    container_name: abhitrade-app
+    container_name: abhitrade-backend-api
     expose:
-      - '3000'
+      - '3001'
     volumes:
       - uploads:/app/tmp/uploads
       - bhavcopy_data:/app/Bhavcopy
       - index_data:/app/index
     environment:
       - NODE_ENV=production
-      - COOKIE_SECURE=${COOKIE_SECURE:-false}
+      - PORT=3001
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
@@ -190,7 +190,6 @@ services:
       - POSTGRES_DB_LIVE=abhitrade_live
       - POSTGRES_USER=${POSTGRES_USER:-tradekaro}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-tradekaro}
-      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-https://abhitrade.com/api}
       - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
       - UPLOAD_DIR=/app/tmp/uploads
       - ANGELONE_API_KEY=${ANGELONE_API_KEY:-}
@@ -198,6 +197,8 @@ services:
       - ANGELONE_PASSWORD=${ANGELONE_PASSWORD:-}
       - ANGELONE_TOTP_SECRET=${ANGELONE_TOTP_SECRET:-}
       - RELIGARE_API_KEY=${RELIGARE_API_KEY:-}
+      - COOKIE_SECURE=${COOKIE_SECURE:-false}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,https://abhitrade.com}
     depends_on:
       redis:
         condition: service_healthy
@@ -206,7 +207,40 @@ services:
     restart: unless-stopped
     stop_grace_period: 5s
     healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://localhost:3000/api/health || exit 1']
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3001/api/health || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - proxy-net
+      - app-net
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '1.0'
+
+  # ── Next.js Frontend App — internal only, fronted by Nginx ─────────────────
+  # Port 3000 is NOT exposed to the host. All page traffic comes through nginx.
+  app:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: abhitrade-app
+    expose:
+      - '3000'
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-https://abhitrade.com/api}
+      - BACKEND_API_URL=http://backend-api:3001
+    depends_on:
+      backend-api:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 5s
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3000/ || exit 1']
       interval: 15s
       timeout: 5s
       retries: 3

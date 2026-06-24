@@ -9,6 +9,8 @@ const router = Router();
 const ZERO = (symbol: string, exchange: string) => ({
   symbol, exchange, ltp: 0, open: 0, high: 0, low: 0, close: 0,
   netChange: 0, percentChange: 0, volume: 0, week52High: 0, week52Low: 0,
+  avgPrice: 0, upperCircuit: 0, lowerCircuit: 0, bid: 0, ask: 0, oi: 0,
+  totBuyQty: 0, totSellQty: 0,
   updatedAt: null, source: 'unavailable',
 });
 
@@ -17,7 +19,17 @@ async function lookupOne(symbol: string, exchange: string) {
     const raw = await redis.get(`at:market:quote:${exchange}:${symbol}`);
     if (raw) {
       const q = JSON.parse(raw) as Record<string, unknown>;
-      return { symbol, exchange, ltp: Number(q.ltp ?? 0), open: Number(q.open ?? 0), high: Number(q.high ?? 0), low: Number(q.low ?? 0), close: Number(q.close ?? 0), netChange: Number(q.netChange ?? 0), percentChange: Number(q.percentChange ?? q.changePct ?? 0), volume: Number(q.volume ?? 0), week52High: Number(q.week52High ?? 0), week52Low: Number(q.week52Low ?? 0), updatedAt: q.updatedAt ?? null, source: 'live' };
+      return {
+        symbol, exchange,
+        ltp: Number(q.ltp ?? 0), open: Number(q.open ?? 0), high: Number(q.high ?? 0),
+        low: Number(q.low ?? 0), close: Number(q.close ?? 0),
+        netChange: Number(q.netChange ?? 0), percentChange: Number(q.percentChange ?? q.changePct ?? 0),
+        volume: Number(q.volume ?? 0), week52High: Number(q.week52High ?? 0), week52Low: Number(q.week52Low ?? 0),
+        avgPrice: Number(q.avgPrice ?? 0), upperCircuit: Number(q.upperCircuit ?? 0),
+        lowerCircuit: Number(q.lowerCircuit ?? 0), bid: Number(q.bid ?? 0), ask: Number(q.ask ?? 0),
+        oi: Number(q.openInterest ?? q.oi ?? 0), totBuyQty: Number(q.totBuyQty ?? 0), totSellQty: Number(q.totSellQty ?? 0),
+        updatedAt: q.updatedAt ?? null, source: 'live',
+      };
     }
   } catch { /* fall through */ }
   try {

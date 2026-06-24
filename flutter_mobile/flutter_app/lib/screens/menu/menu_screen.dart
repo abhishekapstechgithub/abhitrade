@@ -10,11 +10,10 @@ class MenuScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final ext     = context.appColors;
-    final auth    = context.watch<AuthProvider>();
-    final theme   = context.watch<ThemeProvider>();
-    final trading = context.watch<TradingModeProvider>();
-
+    final ext      = context.appColors;
+    final auth     = context.watch<AuthProvider>();
+    final theme    = context.watch<ThemeProvider>();
+    final trading  = context.watch<TradingModeProvider>();
     return Scaffold(
       backgroundColor: ext.bg,
       appBar: AppBar(
@@ -396,3 +395,4 @@ class _ToggleRow extends StatelessWidget {
     );
   }
 }
+

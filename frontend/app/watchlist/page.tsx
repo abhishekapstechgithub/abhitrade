@@ -14,6 +14,7 @@ import { useTheme } from '@/components/theme/ThemeProvider';
 import { useUIStore } from '@/store/useUIStore';
 import { formatNumber, formatPercent, formatVolume } from '@/lib/utils/format';
 import type { WatchlistItem, OptionContract } from '@/types';
+import type { OptionChainResponse } from '@/lib/optionchain/types';
 import { useAngelOnePrices } from '@/hooks/useAngelOneWs';
 
 const STORAGE_KEY = 'tk:watchlists';
@@ -1089,9 +1090,484 @@ function MarketDepthPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
+// ─── OPTION CHAIN PANEL (Univest) ─────────────────────────────────────────────
+
+// Univest OptChainGeeks response types
+interface UnivestOpt {
+  Stk: string;        // "24000.0000"
+  Ltp: number;
+  Vol: number;
+  OI: number;
+  OIChng: number;
+  OIPerChng: number;
+  IV: number;
+  OptGeek: { Delta: number; Theta: number; Gamma: number; Rho: number; Vega: number };
+  ask: number;
+  bid: number;
+  lot: number;
+  SN: string;         // "NIFTY-JUN2026-24000-CE"
+  SId: number;
+  OPFlg: string;      // "I" = ITM, "O" = OTM
+}
+interface UnivestData {
+  CE: UnivestOpt[];
+  PE: UnivestOpt[];
+  SpotP: number;
+  SChng: number;
+  SPerChng: number;
+  OIC: number;
+  OIP: number;
+  Rto: number;
+}
+interface OCRow {
+  strike: number;
+  isAtm: boolean;
+  ceItm: boolean;
+  ce: UnivestOpt | null;
+  pe: UnivestOpt | null;
+}
+
+// Generate upcoming NIFTY expiry Tuesdays (NIFTY expires on Tuesday)
+function getNiftyExpiries(count = 10): Array<{ label: string; value: string }> {
+  const MO = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+  const out: Array<{ label: string; value: string }> = [];
+  const now = new Date();
+  const d = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  // Advance to the next Tuesday (day=2); if today is Tuesday, skip to next week
+  const diff = (2 - d.getUTCDay() + 7) % 7 || 7;
+  d.setUTCDate(d.getUTCDate() + diff);
+  for (let i = 0; i < count; i++) {
+    const y = d.getUTCFullYear(), m = d.getUTCMonth(), day = d.getUTCDate();
+    out.push({
+      label: `${day}${MO[m]}${String(y).slice(2)}`,
+      value: `${y}-${String(m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+    });
+    d.setUTCDate(d.getUTCDate() + 7);
+  }
+  return out;
+}
+
+function OptionChainPanel() {
+  const { openOrderPanel } = useUIStore();
+  const EXPIRIES = useMemo(() => getNiftyExpiries(10), []);
+  const [expiry, setExpiry]   = useState(EXPIRIES[0].value);
+  const [raw, setRaw]         = useState<UnivestData | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState('');
+
+  const fetchChain = useCallback((exp: string, silent = false) => {
+    if (!exp) return;
+    if (!silent) setLoading(true);
+    fetch(`/api/optionchain/univest?expiry=${encodeURIComponent(exp)}`)
+      .then(r => r.json())
+      .then((d: { code: number; remarks: string; data: UnivestData }) => {
+        if (d.remarks !== 'Success' || !d.data?.CE) {
+          setError(d.remarks ?? 'No data');
+          setRaw(null);
+        } else {
+          setRaw(d.data);
+          setError('');
+        }
+        setLoading(false);
+      })
+      .catch(() => { setError('Network error'); setLoading(false); });
+  }, []);
+
+  useEffect(() => {
+    fetchChain(expiry);
+    const iv = setInterval(() => fetchChain(expiry, true), 8000);
+    return () => clearInterval(iv);
+  }, [expiry, fetchChain]);
+
+  // Build paired rows sorted by strike
+  const { rows, atm } = useMemo(() => {
+    if (!raw) return { rows: [] as OCRow[], atm: 0 };
+    const spot = raw.SpotP;
+    const map = new Map<number, { ce: UnivestOpt | null; pe: UnivestOpt | null }>();
+    for (const o of raw.CE) {
+      const k = parseFloat(o.Stk);
+      if (!map.has(k)) map.set(k, { ce: null, pe: null });
+      map.get(k)!.ce = o;
+    }
+    for (const o of raw.PE) {
+      const k = parseFloat(o.Stk);
+      if (!map.has(k)) map.set(k, { ce: null, pe: null });
+      map.get(k)!.pe = o;
+    }
+    const sorted = Array.from(map.entries()).sort((a, b) => a[0] - b[0]);
+    // ATM = strike closest to spot
+    const atmStrike = sorted.reduce((best, [s]) =>
+      Math.abs(s - spot) < Math.abs(best - spot) ? s : best, sorted[0]?.[0] ?? spot);
+
+    const atmIdx = sorted.findIndex(([s]) => s === atmStrike);
+    // Show 7 ITM + ATM + 7 OTM = 15 strikes
+    const start = Math.max(0, atmIdx - 7);
+    const end   = Math.min(sorted.length, atmIdx + 8);
+    const visible = sorted.slice(start, end);
+
+    return {
+      atm: atmStrike,
+      rows: visible.map(([strike, { ce, pe }]) => ({
+        strike,
+        isAtm: strike === atmStrike,
+        ceItm: strike < spot,
+        ce, pe,
+      })),
+    };
+  }, [raw]);
+
+  const isUp  = (raw?.SPerChng ?? 0) >= 0;
+  const fmtN  = (n: number) => n >= 1e7 ? `${(n/1e7).toFixed(2)}Cr` : n >= 1e5 ? `${(n/1e5).toFixed(1)}L` : n > 0 ? n.toLocaleString('en-IN') : '—';
+  const fmtOI = (n: number) => n >= 1e7 ? `${(n/1e7).toFixed(2)}Cr` : n >= 1e5 ? `${(n/1e5).toFixed(1)}L` : n > 0 ? n.toLocaleString('en-IN') : '—';
+  const fmtDOI = (n: number) => {
+    if (!n) return '—';
+    const a = Math.abs(n), s = a >= 1e5 ? `${(a/1e5).toFixed(1)}L` : a.toLocaleString('en-IN');
+    return (n > 0 ? '+' : '−') + s;
+  };
+
+  return (
+    <div className="flex flex-col h-full relative" style={{ background: 'var(--panel-bg)' }}>
+
+      {/* ── Header ── */}
+      <div className="flex items-center gap-3 px-3 py-2 shrink-0"
+        style={{ borderBottom: '1px solid var(--panel-divider)' }}>
+        <span className="text-xs font-bold" style={{ color: '#4f46e5' }}>NIFTY</span>
+        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
+          style={{ background: 'rgba(79,70,229,0.1)', color: '#4f46e5' }}>Option Chain</span>
+        <select value={expiry} onChange={e => setExpiry(e.target.value)}
+          className="h-7 px-2 rounded-lg text-xs outline-none ml-1"
+          style={{ background: 'var(--field-bg, #f1f5f9)', border: '1px solid var(--field-border, #e2e8f0)', color: 'var(--text-secondary)' }}>
+          {EXPIRIES.map(e => <option key={e.value} value={e.value}>{e.label}</option>)}
+        </select>
+        <div className="flex-1" />
+        {loading
+          ? <RefreshCw size={12} className="animate-spin" style={{ color: '#4f46e5' }} />
+          : <button onClick={() => fetchChain(expiry)} className="p-1 rounded hover:opacity-70" style={{ color: 'var(--text-dim)' }}>
+              <RefreshCw size={12} />
+            </button>
+        }
+      </div>
+
+      {/* ── Spot strip ── */}
+      {raw && (
+        <div className="flex items-center gap-3 px-3 py-1.5 shrink-0"
+          style={{ borderBottom: '1px solid var(--panel-divider)', background: 'rgba(79,70,229,0.04)' }}>
+          <span className="font-mono text-sm font-bold" style={{ color: 'var(--text-primary)' }}>
+            {raw.SpotP.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+          </span>
+          <span className="text-[11px] font-semibold" style={{ color: isUp ? '#16a34a' : '#dc2626' }}>
+            {isUp ? '+' : ''}{raw.SChng.toFixed(2)} ({isUp ? '+' : ''}{raw.SPerChng.toFixed(2)}%)
+          </span>
+          <div className="flex-1" />
+          {raw.Rto > 0 && (
+            <span className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
+              PCR: <b>{raw.Rto.toFixed(2)}</b>
+            </span>
+          )}
+          <span className="text-[10px]" style={{ color: 'var(--text-dim)' }}>
+            ATM: <b>{atm.toLocaleString('en-IN')}</b>
+          </span>
+        </div>
+      )}
+
+      {/* ── Column headers ── */}
+      <div className="flex items-center shrink-0 text-[9px] font-bold px-1"
+        style={{ borderBottom: '1px solid var(--panel-divider)', background: 'var(--table-head-bg, #f8fafc)', height: 24 }}>
+        {/* CE side */}
+        <div className="flex flex-1 items-center gap-0" style={{ color: '#16a34a' }}>
+          <span className="w-14 pl-1">OI</span>
+          <span className="w-14">Chng OI</span>
+          <span className="w-14">Vol</span>
+          <span className="w-10">IV</span>
+          <span className="w-14 text-right">LTP</span>
+        </div>
+        {/* Strike */}
+        <div className="w-20 text-center" style={{ color: 'var(--text-dim)', flexShrink: 0 }}>Strike</div>
+        {/* PE side */}
+        <div className="flex flex-1 items-center justify-end gap-0" style={{ color: '#dc2626' }}>
+          <span className="w-14">LTP</span>
+          <span className="w-10 text-right">IV</span>
+          <span className="w-14 text-right">Vol</span>
+          <span className="w-14 text-right">Chng OI</span>
+          <span className="w-14 text-right pr-1">OI</span>
+        </div>
+      </div>
+
+      {/* ── Rows ── */}
+      <div className="flex-1 overflow-y-auto">
+        {error && (
+          <div className="flex flex-col items-center justify-center h-32 gap-2">
+            <p className="text-xs" style={{ color: '#dc2626' }}>{error}</p>
+            <button onClick={() => fetchChain(expiry)}
+              className="text-xs px-3 py-1 rounded-lg"
+              style={{ background: 'rgba(79,70,229,0.1)', color: '#4f46e5' }}>Retry</button>
+          </div>
+        )}
+        {!error && !raw && !loading && (
+          <div className="flex items-center justify-center h-32">
+            <p className="text-xs" style={{ color: 'var(--text-dim)' }}>Loading option chain…</p>
+          </div>
+        )}
+        {rows.map(({ strike, isAtm, ceItm, ce, pe }) => {
+          const atmBg  = isAtm  ? 'rgba(79,70,229,0.1)'  : 'transparent';
+          const ceBg   = !isAtm && ceItm  ? 'rgba(34,197,94,0.04)' : atmBg;
+          const peBg   = !isAtm && !ceItm ? 'rgba(96,165,250,0.04)' : atmBg;
+
+          return (
+            <div key={strike} className="group flex items-stretch text-[10px] tabular-nums font-mono"
+              style={{ borderBottom: '1px solid var(--row-border, #f1f5f9)', minHeight: 30 }}>
+
+              {/* CE side */}
+              <div className="flex flex-1 items-center px-1 gap-0" style={{ background: ceBg }}>
+                <span className="w-14 truncate" style={{ color: '#16a34a' }}>{ce ? fmtOI(ce.OI) : '—'}</span>
+                <span className="w-14 truncate"
+                  style={{ color: ce && ce.OIChng > 0 ? '#16a34a' : ce && ce.OIChng < 0 ? '#dc2626' : 'var(--text-dim)' }}>
+                  {ce ? fmtDOI(ce.OIChng) : '—'}
+                </span>
+                <span className="w-14 truncate" style={{ color: 'var(--text-dim)' }}>{ce ? fmtN(ce.Vol) : '—'}</span>
+                <span className="w-10 truncate" style={{ color: '#16a34a' }}>{ce ? `${ce.IV.toFixed(1)}%` : '—'}</span>
+                <div className="w-14 text-right flex flex-col items-end">
+                  <span className="font-semibold" style={{ color: '#16a34a' }}>{ce ? ce.Ltp.toFixed(2) : '—'}</span>
+                  <div className="hidden group-hover:flex gap-0.5">
+                    <button onClick={() => ce && openOrderPanel(ce.SN, 'BUY')}
+                      className="text-[8px] px-1 rounded font-bold text-white" style={{ background: '#16a34a' }}>B</button>
+                    <button onClick={() => ce && openOrderPanel(ce.SN, 'SELL')}
+                      className="text-[8px] px-1 rounded font-bold text-white" style={{ background: '#dc2626' }}>S</button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Strike */}
+              <div className="flex flex-col items-center justify-center shrink-0"
+                style={{ width: 80, background: isAtm ? 'rgba(79,70,229,0.15)' : 'transparent' }}>
+                <span className={`font-bold ${isAtm ? 'text-[12px]' : 'text-[11px]'}`}
+                  style={{ color: isAtm ? '#4f46e5' : 'var(--text-secondary)' }}>
+                  {strike.toLocaleString('en-IN')}
+                </span>
+                {isAtm && <span className="text-[8px] font-bold" style={{ color: '#4f46e5' }}>ATM</span>}
+              </div>
+
+              {/* PE side */}
+              <div className="flex flex-1 items-center justify-end px-1 gap-0" style={{ background: peBg }}>
+                <div className="w-14 flex flex-col items-start">
+                  <span className="font-semibold" style={{ color: '#dc2626' }}>{pe ? pe.Ltp.toFixed(2) : '—'}</span>
+                  <div className="hidden group-hover:flex gap-0.5">
+                    <button onClick={() => pe && openOrderPanel(pe.SN, 'BUY')}
+                      className="text-[8px] px-1 rounded font-bold text-white" style={{ background: '#16a34a' }}>B</button>
+                    <button onClick={() => pe && openOrderPanel(pe.SN, 'SELL')}
+                      className="text-[8px] px-1 rounded font-bold text-white" style={{ background: '#dc2626' }}>S</button>
+                  </div>
+                </div>
+                <span className="w-10 text-right" style={{ color: '#dc2626' }}>{pe ? `${pe.IV.toFixed(1)}%` : '—'}</span>
+                <span className="w-14 text-right" style={{ color: 'var(--text-dim)' }}>{pe ? fmtN(pe.Vol) : '—'}</span>
+                <span className="w-14 text-right"
+                  style={{ color: pe && pe.OIChng > 0 ? '#16a34a' : pe && pe.OIChng < 0 ? '#dc2626' : 'var(--text-dim)' }}>
+                  {pe ? fmtDOI(pe.OIChng) : '—'}
+                </span>
+                <span className="w-14 text-right pr-1" style={{ color: '#dc2626' }}>{pe ? fmtOI(pe.OI) : '—'}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── OVERVIEW PANEL ───────────────────────────────────────────────────────────
+
+interface QuoteDetail {
+  ltp: number; open: number; high: number; low: number; close: number;
+  netChange: number; percentChange: number; volume: number;
+  avgPrice: number; bid: number; ask: number; oi: number;
+  upperCircuit: number; lowerCircuit: number;
+  week52High: number; week52Low: number;
+}
+
+function RangeBar({ min, max, current, lowLabel, highLabel }: {
+  min: number; max: number; current: number;
+  lowLabel: string; highLabel: string;
+}) {
+  const pct = max > min ? Math.max(0, Math.min(100, ((current - min) / (max - min)) * 100)) : 50;
+  const fmt = (n: number) => n > 0 ? n.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—';
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="relative h-2 rounded-full"
+        style={{ background: 'linear-gradient(to right, #dc2626, #16a34a)' }}>
+        <div className="absolute top-1/2 -translate-x-1/2"
+          style={{
+            left: `${pct}%`, top: '50%', transform: 'translateX(-50%) translateY(-30%)',
+            width: 0, height: 0,
+            borderLeft: '5px solid transparent', borderRight: '5px solid transparent',
+            borderTop: '8px solid #1e293b',
+          }} />
+      </div>
+      <div className="flex justify-between text-[10px]" style={{ color: 'var(--text-dim)' }}>
+        <span>{lowLabel}: {fmt(min)}</span>
+        <span className="font-semibold" style={{ color: 'var(--text-primary)' }}>{fmt(current)}</span>
+        <span>{highLabel}: {fmt(max)}</span>
+      </div>
+    </div>
+  );
+}
+
+function OverviewPanel({ selectedItem }: { selectedItem: WatchlistItem }) {
+  const [data, setData] = useState<QuoteDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetch(`/api/quote?symbol=${encodeURIComponent(selectedItem.symbol)}&exchange=${encodeURIComponent(selectedItem.exchange)}`)
+      .then(r => r.json())
+      .then(d => { if (!cancelled) { setData(d as QuoteDetail); setLoading(false); } })
+      .catch(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedItem.symbol, selectedItem.exchange]);
+
+  const ltp        = data?.ltp        ?? selectedItem.ltp         ?? 0;
+  const open       = data?.open       ?? selectedItem.open        ?? 0;
+  const high       = data?.high       ?? selectedItem.high        ?? 0;
+  const low        = data?.low        ?? selectedItem.low         ?? 0;
+  const close      = data?.close      ?? selectedItem.prevClose   ?? 0;
+  const netChange  = data?.netChange  ?? selectedItem.change      ?? 0;
+  const pctChange  = data?.percentChange ?? selectedItem.changePercent ?? 0;
+  const volume     = data?.volume     ?? selectedItem.volume      ?? 0;
+  const avgPrice   = data?.avgPrice   ?? 0;
+  const bid        = data?.bid        ?? selectedItem.bid         ?? 0;
+  const ask        = data?.ask        ?? selectedItem.ask         ?? 0;
+  const oi         = data?.oi         ?? selectedItem.oi          ?? 0;
+  const upper      = data?.upperCircuit  ?? 0;
+  const lower      = data?.lowerCircuit  ?? 0;
+  const w52High    = data?.week52High    ?? 0;
+  const w52Low     = data?.week52Low     ?? 0;
+
+  const isUp       = netChange >= 0;
+  const changeClr  = isUp ? '#16a34a' : '#dc2626';
+
+  const fmtPrice = (n: number) => n > 0
+    ? n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : '—';
+  const fmtVol = (n: number) => {
+    if (n >= 1e7) return `${(n / 1e7).toFixed(2)}Cr`;
+    if (n >= 1e5) return `${(n / 1e5).toFixed(2)}L`;
+    return n > 0 ? n.toLocaleString('en-IN') : '—';
+  };
+
+  return (
+    <div className="flex flex-col overflow-y-auto p-4 gap-5 relative"
+      style={{ background: 'var(--panel-bg)', height: '100%' }}>
+
+      {/* ── Header ── */}
+      <div className="flex items-start gap-3">
+        <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-bold truncate" style={{ color: 'var(--text-primary)' }}>
+              {selectedItem.name || selectedItem.symbol}
+            </span>
+            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0"
+              style={{ background: 'rgba(79,70,229,0.1)', color: '#4f46e5' }}>
+              {selectedItem.exchange}
+            </span>
+          </div>
+          <span className="text-[11px]" style={{ color: 'var(--text-dim)' }}>
+            {selectedItem.symbol}
+          </span>
+        </div>
+        <div className="flex flex-col items-end gap-0.5 shrink-0">
+          <span className="text-xl font-bold tabular-nums" style={{ color: 'var(--text-primary)' }}>
+            ₹{fmtPrice(ltp)}
+          </span>
+          <span className="text-[11px] font-medium tabular-nums" style={{ color: changeClr }}>
+            {isUp ? '+' : ''}{fmtPrice(netChange)} ({isUp ? '+' : ''}{pctChange.toFixed(2)}%)
+          </span>
+        </div>
+      </div>
+
+      {/* ── Activity ── */}
+      <div>
+        <p className="text-[10px] font-semibold mb-2 uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+          Activity
+        </p>
+        <div className="grid grid-cols-4 gap-2">
+          {([
+            { label: 'Open',  value: fmtPrice(open),  color: 'var(--text-primary)' },
+            { label: 'High',  value: fmtPrice(high),  color: '#16a34a' },
+            { label: 'Low',   value: fmtPrice(low),   color: '#dc2626' },
+            { label: 'Close', value: fmtPrice(close), color: 'var(--text-primary)' },
+          ] as const).map(({ label, value, color }) => (
+            <div key={label} className="flex flex-col gap-1 rounded-lg p-2.5"
+              style={{ background: 'var(--surface-2, #f8fafc)', border: '1px solid var(--panel-divider)' }}>
+              <span className="text-[9px] uppercase tracking-wide" style={{ color: 'var(--text-dim)' }}>
+                {label}
+              </span>
+              <span className="text-[11px] font-semibold tabular-nums" style={{ color }}>
+                {value}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Price Details ── */}
+      <div>
+        <p className="text-[10px] font-semibold mb-2 uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+          Price Details
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          {[
+            { label: 'Avg Price',     value: fmtPrice(avgPrice) },
+            { label: 'Volume',        value: fmtVol(volume) },
+            { label: 'Open Interest', value: oi > 0 ? fmtVol(oi) : '—' },
+            { label: 'Bid / Ask',     value: (bid > 0 || ask > 0) ? `${fmtPrice(bid)} / ${fmtPrice(ask)}` : '—' },
+          ].map(({ label, value }) => (
+            <div key={label} className="flex flex-col gap-1 rounded-lg p-2.5"
+              style={{ background: 'var(--surface-2, #f8fafc)', border: '1px solid var(--panel-divider)' }}>
+              <span className="text-[9px] uppercase tracking-wide" style={{ color: 'var(--text-dim)' }}>
+                {label}
+              </span>
+              <span className="text-[11px] font-semibold tabular-nums" style={{ color: 'var(--text-primary)' }}>
+                {value}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Circuit Limits ── */}
+      {(upper > 0 || lower > 0) && (
+        <div>
+          <p className="text-[10px] font-semibold mb-2 uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+            Circuit Limits
+          </p>
+          <RangeBar min={lower} max={upper} current={ltp} lowLabel="Lower" highLabel="Upper" />
+        </div>
+      )}
+
+      {/* ── 52 Week Range ── */}
+      {(w52High > 0 || w52Low > 0) && (
+        <div>
+          <p className="text-[10px] font-semibold mb-2 uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+            52 Week Range
+          </p>
+          <RangeBar min={w52Low} max={w52High} current={ltp} lowLabel="52W Low" highLabel="52W High" />
+        </div>
+      )}
+
+      {/* ── Loading overlay ── */}
+      {loading && (
+        <div className="absolute inset-0 flex items-center justify-center"
+          style={{ background: 'rgba(255,255,255,0.65)', zIndex: 10 }}>
+          <RefreshCw size={18} className="animate-spin" style={{ color: '#4f46e5' }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── CENTER CHART PANEL ───────────────────────────────────────────────────────
 
-type CenterTab = 'chart' | 'overview' | 'optionchain' | 'composition';
+type CenterTab = 'chart' | 'overview' | 'optionchain';
 
 interface CenterPanelProps {
   selectedItem:      WatchlistItem | null;
@@ -1140,6 +1616,10 @@ function CenterPanel({
             theme={chartTheme}
             interval="DAY"
           />
+        ) : activeTab === 'overview' ? (
+          <OverviewPanel key={`${selectedItem.symbol}-${selectedItem.exchange}`} selectedItem={selectedItem} />
+        ) : activeTab === 'optionchain' ? (
+          <OptionChainPanel />
         ) : (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3"
             style={{ background: isDark ? '#0d1117' : '#f8fafc' }}>
@@ -1278,7 +1758,7 @@ function ChartMode({ items, activeWL, setActiveWL, onAdd, onRemove, onSwitchToTa
   const CENTER_TABS: Array<{ key: CenterTab; label: string }> = [
     { key: 'chart',       label: 'Chart'             },
     { key: 'optionchain', label: 'Option Chain'      },
-    { key: 'composition', label: 'Stock Composition' },
+    { key: 'overview',    label: 'Overview'           },
   ];
 
   useEffect(() => {
@@ -1302,7 +1782,7 @@ function ChartMode({ items, activeWL, setActiveWL, onAdd, onRemove, onSwitchToTa
           {/* Tabs */}
           {CENTER_TABS.map(t => (
             <button key={t.key}
-              onClick={() => { setActiveTab(t.key); if (t.key === 'optionchain') setShowOcOverlay(p => !p); }}
+              onClick={() => setActiveTab(t.key)}
               className="px-3 h-10 text-[11px] font-medium transition-all relative whitespace-nowrap"
               style={activeTab === t.key
                 ? { color: '#4f46e5', borderBottom: '2px solid #4f46e5' }

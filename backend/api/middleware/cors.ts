@@ -2,7 +2,9 @@ import cors from 'cors';
 
 // Origins allowed to send credentialed requests (cookies)
 const ALLOWED_ORIGINS = [
-  'http://localhost:3000',
+  'http://localhost',        // nginx dev proxy (port 80)
+  'http://localhost:3000',   // Next.js direct
+  'http://localhost:3001',   // backend direct
   'http://localhost:8081',
   'http://localhost:8082',
   'http://localhost:19006',

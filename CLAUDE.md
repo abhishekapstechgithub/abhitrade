@@ -6,7 +6,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-The project is **scaffolded and running**. All major pages, components, API routes, Docker services, and data stores are implemented. Use the commands below to start, develop, and manage the app.
+The project is **scaffolded and running** as a **monorepo** with three parts:
+- `frontend/` — Pure Next.js UI (no API routes)
+- `backend/api/` — Express.js REST API server (migrated from Next.js app/api/)
+- `backend/strategy-api/` — FastAPI Python service for strategies/backtests
+- `flutter_mobile/` — Flutter mobile app
+
+All major pages, components, API routes, Docker services, and data stores are implemented.
+
+---
+
+## Monorepo Structure
+
+```
+/
+├── frontend/              ← Next.js App Router (UI only, no API routes)
+├── backend/
+│   ├── api/               ← Express.js server (port 3001)
+│   └── strategy-api/      ← FastAPI Python server (port 8000)
+├── flutter_mobile/        ← Flutter mobile app
+├── docker-compose.yml     ← Orchestrates all services
+├── nginx/                 ← Reverse proxy config
+├── certbot/               ← SSL certs
+├── scripts/               ← DB migrations, init scripts
+├── Bhavcopy/              ← NSE bhavcopy CSV data
+└── .env.local             ← Root env vars for docker-compose
+```
 
 ---
 
@@ -14,44 +39,73 @@ The project is **scaffolded and running**. All major pages, components, API rout
 
 | Layer | Choice |
 |---|---|
-| Frontend framework | Next.js (App Router) |
+| Frontend framework | Next.js (App Router) — UI only |
+| Backend API | Express.js (standalone, port 3001) |
+| Strategy API | FastAPI (Python, port 8000) |
+| Mobile | Flutter |
 | Styling | Tailwind CSS |
 | State management | Zustand |
 | Charting | ApexCharts (lightweight, React-friendly) |
-| API layer | REST + WebSocket (mock initially) |
-| Auth | JWT with refresh tokens |
-| File uploads | Multipart via Next.js API routes |
+| Auth | JWT with refresh tokens (cookies) |
+| File uploads | Multipart via Express + multer |
 | Cache / search index | Redis (Dockerized) |
-| Worker | Node.js background job to parse and load security master into Redis |
+| Worker | Node.js background job (backend/api/workers/) |
 | Container orchestration | Docker Compose |
 
 ---
 
 ## Development Commands
 
-### Local (no Docker)
+### Frontend (Next.js UI)
 
 ```bash
+cd frontend
+
 # Install dependencies
 npm install
 
-# Start dev server (Next.js) — requires Redis + Postgres running separately
+# Start dev server — proxies /api/* to http://localhost:3001
+cp .env.local.example .env.local
 npm run dev
 
 # Build for production
 npm run build
 
-# Run production build
-npm run start
-
-# Lint
-npm run lint
-
 # Type-check
 npx tsc --noEmit
 ```
 
-Single component/page dev: open `http://localhost:3000` and navigate to the relevant route.
+Frontend runs on `http://localhost:3000`. All `/api/*` requests are proxied to the Express backend (configured in `next.config.mjs` rewrites).
+
+### Backend API (Express)
+
+```bash
+cd backend/api
+
+# Install dependencies
+npm install
+
+# Start dev server (hot reload via tsx watch)
+npm run dev
+
+# Start production
+npm run start
+```
+
+Backend runs on `http://localhost:3001`. All REST API routes are here.
+
+### Strategy API (FastAPI)
+
+```bash
+cd backend/strategy-api
+
+# Create virtual env and install deps
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+
+# Start server
+uvicorn main:app --reload --port 8000
+```
 
 ---
 
@@ -324,40 +378,65 @@ docker-compose exec redis redis-cli
 ## Project Structure (Target)
 
 ```
-tradekaro/
-├── app/                    # Next.js App Router pages
-│   ├── layout.tsx          # Root layout with sticky header
-│   ├── page.tsx            # Dashboard home
-│   ├── markets/            # Option chain, charts, composition, strategies
-│   ├── watchlist/
-│   ├── portfolio/
-│   ├── orders/
-│   ├── positions/
-│   ├── tools/
-│   ├── profile/
-│   └── security-master/    # Upload + Redis ingestion UI
-├── components/
-│   ├── layout/             # Header, nav, sidebar
-│   ├── markets/            # OptionChain, ChartPanel, StockComposition, Strategies
-│   ├── watchlist/
-│   ├── portfolio/
-│   ├── orders/
-│   ├── positions/
-│   ├── tools/
-│   ├── profile/
-│   ├── search/             # Global search bar + results overlay
-│   └── ui/                 # Shared primitives (Button, Badge, Table, Modal, etc.)
-├── lib/
-│   ├── redis.ts            # Redis client singleton
-│   ├── mock-data/          # Static mock JSON for all modules
-│   └── utils/              # Formatters (currency, %, dates), color helpers
-├── store/                  # Zustand stores per domain
-├── types/                  # TypeScript data model interfaces (see Data Models below)
-├── app/api/                # Next.js API routes (upload, search, contract lookup, health)
-├── workers/                # Security master file parser + Redis loader
+abhitrade/                      ← monorepo root
+├── frontend/                   ← Next.js App Router (UI only)
+│   ├── app/                    # Pages (no app/api/ — all routes are in backend)
+│   │   ├── layout.tsx
+│   │   ├── page.tsx
+│   │   ├── markets/
+│   │   ├── watchlist/
+│   │   ├── portfolio/
+│   │   ├── orders/
+│   │   ├── positions/
+│   │   ├── tools/
+│   │   ├── profile/
+│   │   └── security-master/
+│   ├── components/             # UI components
+│   ├── store/                  # Zustand stores
+│   ├── hooks/
+│   ├── types/
+│   ├── public/
+│   ├── package.json            # UI-only deps (next, react, zustand, charts, tailwind)
+│   ├── next.config.mjs         # Rewrites /api/* → Express backend
+│   └── .env.local.example
+│
+├── backend/
+│   ├── api/                    ← Express.js REST API server (port 3001)
+│   │   ├── server.ts           # Entry point
+│   │   ├── routes/             # One file per feature group
+│   │   │   ├── index.ts        # Registers all routers
+│   │   │   ├── auth.ts
+│   │   │   ├── angelone.ts
+│   │   │   ├── watchlists.ts
+│   │   │   ├── orders.ts
+│   │   │   ├── portfolio.ts
+│   │   │   ├── alerts.ts
+│   │   │   ├── optionchain.ts
+│   │   │   ├── market.ts       # market-stream (SSE), market-sync, movers
+│   │   │   ├── quotes.ts       # quote, quotes, tokens, scrips, search
+│   │   │   ├── bhavcopy.ts
+│   │   │   ├── upload.ts
+│   │   │   ├── chart.ts
+│   │   │   └── system.ts       # health, redis-stats
+│   │   ├── middleware/
+│   │   │   ├── auth.ts
+│   │   │   └── cors.ts
+│   │   ├── lib/                # Shared server libs (db, redis, auth, utils)
+│   │   ├── workers/            # Security master CSV loader
+│   │   ├── package.json        # Server-only deps (express, pg, ioredis, multer, …)
+│   │   └── Dockerfile
+│   │
+│   └── strategy-api/           ← FastAPI Python (port 8000)
+│       ├── main.py
+│       ├── requirements.txt
+│       └── Dockerfile
+│
+├── flutter_mobile/             ← Flutter mobile app
 ├── docker-compose.yml
-├── .env.local.example
-└── public/                 # Static assets, logo
+├── nginx/
+├── scripts/                    # DB migrations, init scripts
+├── Bhavcopy/
+└── .env.local
 ```
 
 ---
@@ -368,7 +447,7 @@ tradekaro/
 Global search bar (`Ctrl+S`) queries Redis first via `/api/search?q=`. Redis holds security master records loaded by the worker. On miss, falls back to the in-memory mock dataset. Results show symbol, exchange, instrument type with quick-open actions (chart / order / option chain).
 
 ### Security Master Upload Flow
-Upload page (`/security-master`) accepts CSV/TXT/ZIP. The Next.js API route at `/api/upload` streams the file to a temp path, then spawns the worker (`workers/load-security-master.ts`) which parses rows, maps columns, validates, deduplicates, and bulk-writes into Redis hashes/sets using the key schema below.
+Upload page (`/security-master`) accepts CSV/TXT/ZIP. The frontend posts to `/api/upload` which nginx proxies to the Express backend. The `backend/api/routes/upload.ts` handler receives the file via multer, then spawns the worker (`backend/api/workers/load-security-master.ts`) which parses rows, validates, deduplicates, and bulk-writes into Redis using the key schema below.
 
 ### Redis Key Schema
 ```
