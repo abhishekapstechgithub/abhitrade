@@ -19,7 +19,15 @@ export interface BhavcopyStats {
   files:        number;
   totalLoaded:  number;
   totalSkipped: number;
+  purged:       number;
   results:      BhavcopyResult[];
+}
+
+interface BhavcopyFileInternal {
+  result:    BhavcopyResult;
+  exchange?: string;
+  segment?:  string;
+  tokens:    string[];
 }
 
 // ── Schema migrations ──────────────────────────────────────────────────────────
@@ -274,7 +282,7 @@ function str(v: number | null): string {
 
 // ── Per-file processor ─────────────────────────────────────────────────────────
 
-async function processFile(filePath: string): Promise<BhavcopyResult> {
+async function processFile(filePath: string): Promise<BhavcopyFileInternal> {
   const result: BhavcopyResult = { file: path.basename(filePath), loaded: 0, skipped: 0, errors: [], date: null };
 
   let content: string;
@@ -282,7 +290,7 @@ async function processFile(filePath: string): Promise<BhavcopyResult> {
     content = fs.readFileSync(filePath, 'utf8');
   } catch (e) {
     result.errors.push(`Read error: ${(e as Error).message}`);
-    return result;
+    return { result, tokens: [] };
   }
 
   let rows: Record<string, string>[];
@@ -292,10 +300,14 @@ async function processFile(filePath: string): Promise<BhavcopyResult> {
     }) as Record<string, string>[];
   } catch (e) {
     result.errors.push(`CSV parse error: ${(e as Error).message}`);
-    return result;
+    return { result, tokens: [] };
   }
 
-  if (!rows.length) return result;
+  if (!rows.length) return { result, tokens: [] };
+
+  let returnExchange: string | undefined;
+  let returnSegment:  string | undefined;
+  let returnTokens:   string[] = [];
 
   const headers = Object.keys(rows[0]);
   const newFmt  = isNewFormat(headers);
@@ -308,9 +320,16 @@ async function processFile(filePath: string): Promise<BhavcopyResult> {
     const prevs: string[] = [],  chgs: string[] = [],  pcts: string[] = [];
     const vols: string[] = [],   ois: string[] = [],   dts: string[] = [];
 
+    let bhavExchange: string | undefined;
+    let bhavSegment: string | undefined;
+    const underlyingSpots = new Map<string, number>();
+
     for (const row of rows) {
       const token = row['FinInstrmId']?.trim();
       if (!token) { result.skipped++; continue; }
+
+      if (!bhavExchange) bhavExchange = row['Src']?.trim().toUpperCase();
+      if (!bhavSegment)  bhavSegment  = row['Sgmt']?.trim().toUpperCase();
 
       const ltp       = p(row['LastPric']);
       const open      = p(row['OpnPric']);
@@ -326,6 +345,15 @@ async function processFile(filePath: string): Promise<BhavcopyResult> {
         ? parseFloat(((netChg / prev) * 100).toFixed(4)) : null;
 
       if (!result.date && date) result.date = date;
+
+      // Capture underlying spot price from FO rows — TckrSymb IS the underlying symbol
+      if (row['Sgmt']?.trim().toUpperCase() === 'FO') {
+        const sym = row['TckrSymb']?.trim();
+        const undPric = p(row['UndrlygPric']);
+        if (sym && undPric && undPric > 0 && !underlyingSpots.has(sym)) {
+          underlyingSpots.set(sym, undPric);
+        }
+      }
 
       tokens.push(token);
       ltps.push(str(ltp));   opens.push(str(open));  highs.push(str(high));
@@ -351,6 +379,22 @@ async function processFile(filePath: string): Promise<BhavcopyResult> {
         tokens, ltps, opens, highs, lows, closes, prevs, pcts, vols, ois, dts,
       ]).catch(() => {});
     }
+
+    // Write underlying spots to Redis so getSpot() resolves without MOCK_SPOT fallback
+    if (underlyingSpots.size > 0) {
+      const pipe = redis.pipeline();
+      const now = Date.now();
+      for (const [sym, ltp] of underlyingSpots) {
+        pipe.set(`oc:spot:${sym}`, JSON.stringify({ ltp, change: 0, changePct: 0 }));
+        pipe.set(`at:idx:${sym}`, JSON.stringify({ symbol: sym, ltp, change: 0, changePercent: 0, open: 0, high: 0, low: 0, close: 0, updatedAt: now }));
+      }
+      pipe.exec().catch(() => {});
+      console.log(`[bhavcopy] Wrote spot prices to Redis: ${[...underlyingSpots.keys()].join(', ')}`);
+    }
+
+    returnExchange = bhavExchange;
+    returnSegment  = bhavSegment;
+    returnTokens   = tokens;
 
   } else {
     // ── Old format: batch by symbol+series ────────────────────────────────────
@@ -410,7 +454,7 @@ async function processFile(filePath: string): Promise<BhavcopyResult> {
     }
   }
 
-  return result;
+  return { result, exchange: returnExchange, segment: returnSegment, tokens: returnTokens };
 }
 
 // ── Public entry point ─────────────────────────────────────────────────────────
@@ -421,24 +465,60 @@ export async function loadBhavcopy(): Promise<BhavcopyStats> {
   await ensureColumns().catch(() => {});
 
   if (!fs.existsSync(dir)) {
-    return { files: 0, totalLoaded: 0, totalSkipped: 0, results: [] };
+    return { files: 0, totalLoaded: 0, totalSkipped: 0, purged: 0, results: [] };
   }
 
   const files = fs.readdirSync(dir).filter(f => /\.(csv|CSV)$/.test(f));
   if (!files.length) {
-    return { files: 0, totalLoaded: 0, totalSkipped: 0, results: [] };
+    return { files: 0, totalLoaded: 0, totalSkipped: 0, purged: 0, results: [] };
   }
 
   // Process files sequentially — avoids OOM on large NSE FO files
-  const results: BhavcopyResult[] = [];
+  const fileInternals: BhavcopyFileInternal[] = [];
   for (const f of files) {
-    results.push(await processFile(path.join(dir, f)));
+    fileInternals.push(await processFile(path.join(dir, f)));
+  }
+  const results = fileInternals.map(fi => fi.result);
+
+  // ── Purge security_master rows not found in any bhavcopy file ─────────────
+  // Group collected tokens by exchange+segment so each pairing is purged independently.
+  const byExchSeg = new Map<string, Set<string>>();
+  for (const fi of fileInternals) {
+    if (fi.exchange && fi.segment && fi.tokens.length) {
+      const key = `${fi.exchange}:${fi.segment}`;
+      const s = byExchSeg.get(key) ?? new Set<string>();
+      for (const t of fi.tokens) s.add(t);
+      byExchSeg.set(key, s);
+    }
+  }
+
+  let purged = 0;
+  if (byExchSeg.size > 0) {
+    const pool = getPool('live');
+    for (const [key, tokenSet] of byExchSeg) {
+      const [exchange, segment] = key.split(':');
+      const tokens = Array.from(tokenSet);
+      try {
+        const res = await pool.query(
+          `DELETE FROM security_master
+           WHERE exchange = $1 AND segment = $2
+             AND token != ALL($3::TEXT[])`,
+          [exchange, segment, tokens],
+        );
+        const n = res.rowCount ?? 0;
+        purged += n;
+        console.log(`[bhavcopy] Purged ${n} security_master rows not in bhavcopy for ${exchange}/${segment}`);
+      } catch (e) {
+        console.error('[bhavcopy] Purge error:', e);
+      }
+    }
   }
 
   return {
     files:        files.length,
     totalLoaded:  results.reduce((s, r) => s + r.loaded,  0),
     totalSkipped: results.reduce((s, r) => s + r.skipped, 0),
+    purged,
     results,
   };
 }

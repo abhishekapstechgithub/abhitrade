@@ -102,6 +102,7 @@ export const MOCK_SPOT: Record<string, { ltp: number; change: number; changePct:
   FINNIFTY:    { ltp: 23845.90, change: 42.3,   changePct: 0.18 },
   MIDCPNIFTY:  { ltp: 12340.00, change: 15.0,   changePct: 0.12 },
   SENSEX:      { ltp: 75527.95, change: 1695.4, changePct: 2.30 },
+  BANKEX:      { ltp: 62000.00, change: 0,      changePct: 0    },
   RELIANCE:    { ltp: 1293.00,  change: 5.5,    changePct: 0.43 },
   TCS:         { ltp: 2161.40,  change: 12.2,   changePct: 0.57 },
   INFY:        { ltp: 1845.60,  change: -8.4,   changePct: -0.45 },

@@ -31,13 +31,15 @@ const idxKey        = (sym: string)             => `at:idx:${sym}`;
 
 // ── Token map for index symbols ───────────────────────────────────────────────
 const IDX_TOKENS_MAP: Record<string, string[]> = {
-  NSE: ['99926000', '99926009', '99926006', '99926003'],
-  BSE: ['99919000'],
+  NSE: ['99926000', '99926009', '99926037', '99926006', '99926003'],
+  BSE: ['99919000', '99919012'],
 };
 const IDX_TOKEN_TO_SYMBOL: Record<string, string> = {
   '99926000': 'NIFTY',
   '99926009': 'BANKNIFTY',
+  '99926037': 'FINNIFTY',
   '99919000': 'SENSEX',
+  '99919012': 'BANKEX',
   '99926006': 'NIFTY IT',
   '99926003': 'NIFTY MIDCAP 100',
 };
@@ -359,8 +361,10 @@ function buildTokenToSymbol(): Record<string, string> {
   for (const [sym, info] of Object.entries(INDEX_TOKENS))  addEntry(sym, info.exchange, info.token);
   for (const [sym, info] of Object.entries(EQUITY_TOKENS)) addEntry(sym, info.exchange, info.token);
   // Index token overrides (canonical short name)
-  for (const [token, sym] of Object.entries(IDX_TOKEN_TO_SYMBOL)) addEntry(sym, 'NSE', token);
-  addEntry('SENSEX', 'BSE', '99919000');
+  for (const [token, sym] of Object.entries(IDX_TOKEN_TO_SYMBOL)) {
+    const exchange = ['99919000', '99919012'].includes(token) ? 'BSE' : 'NSE';
+    addEntry(sym, exchange, token);
+  }
   return out;
 }
 

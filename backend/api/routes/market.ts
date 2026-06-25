@@ -154,7 +154,7 @@ router.get('/market-stream', (req: Request, res: Response) => {
     const lastSent = new Map<string, string>();
     let heartbeat = 0;
     while (!closed) {
-      await new Promise(r => setTimeout(r, 1500));
+      await new Promise(r => setTimeout(r, 500));
       if (closed) break;
       try {
         const quotes = await fetchQuotes();
