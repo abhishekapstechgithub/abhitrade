@@ -20,16 +20,19 @@ class ApiService {
     return prefs.getString(AppConstants.keyAccessToken);
   }
 
-  Map<String, String> _headers([String? token]) => {
+  Map<String, String> _headers([String? token, bool noCache = false]) => {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
     if (token != null) 'Authorization': 'Bearer $token',
+    if (noCache) 'Cache-Control': 'no-cache, no-store',
+    if (noCache) 'Pragma': 'no-cache',
   };
 
-  Future<Map<String, dynamic>> _get(String path, {bool auth = true}) async {
+  Future<Map<String, dynamic>> _get(String path,
+      {bool auth = true, bool noCache = false}) async {
     final token = auth ? await _token() : null;
     final uri = Uri.parse('${AppConstants.apiBase}$path');
-    final res = await http.get(uri, headers: _headers(token))
+    final res = await http.get(uri, headers: _headers(token, noCache))
         .timeout(const Duration(seconds: 15));
     return _parse(res);
   }
@@ -80,12 +83,11 @@ class ApiService {
       }
       final body = jsonDecode(raw) as Map<String, dynamic>;
       if (res.statusCode >= 400) {
-        throw ApiException(
-          res.statusCode,
-          body['error']?.toString() ??
-              body['message']?.toString() ??
-              'Request failed (${res.statusCode})',
-        );
+        final errMsg = body['error']?.toString() ?? body['message']?.toString();
+        // Some endpoints return 5xx with a valid data payload (server misconfiguration).
+        // Return the body if there is no error/message — the data is usable.
+        if (res.statusCode >= 500 && errMsg == null) return body;
+        throw ApiException(res.statusCode, errMsg ?? 'Request failed (${res.statusCode})');
       }
       return body;
     } on ApiException {
@@ -300,11 +302,21 @@ class ApiService {
 
   // ─── Option chain ──────────────────────────────────────────────────────────
 
-  /// Fetch NIFTY option chain via Univest proxy.
-  /// [expiry] = 'YYYY-MM-DD' format.
-  /// Response: { code, data: { CE: [...], PE: [...], SpotP, SChng, SPerChng } }
-  Future<Map<String, dynamic>> getOptionChain(String expiry) =>
-      _get('/api/optionchain/univest?expiry=$expiry', auth: false);
+  /// Fetch available expiry dates for a symbol.
+  /// Response: { symbol, expiries: ['YYYY-MM-DD', ...], nearest: 'YYYY-MM-DD' }
+  Future<Map<String, dynamic>> getOptionChainExpiries(String symbol,
+      {String exchange = 'NSE'}) =>
+      _get('/api/optionchain/expiries?symbol=$symbol&exchange=$exchange',
+          auth: false, noCache: true);
+
+  /// Fetch full option chain for any symbol.
+  /// [symbol] = 'NIFTY', 'SENSEX', 'BANKNIFTY', etc.
+  /// [expiry] = 'YYYY-MM-DD' format (must match a date from getOptionChainExpiries).
+  /// Response: { symbol, expiry, spot, atm, rows: [{strike, isAtm, isItm, ce:{...}, pe:{...}}] }
+  Future<Map<String, dynamic>> getOptionChain(String symbol, String expiry,
+          {int strikeCount = 20}) =>
+      _get('/api/optionchain?symbol=$symbol&expiry=$expiry&strikeCount=$strikeCount',
+          auth: false, noCache: true);
 
   // ─── Chart data ────────────────────────────────────────────────────────────
 

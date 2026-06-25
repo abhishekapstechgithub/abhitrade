@@ -15,9 +15,9 @@ class MenuScreen extends StatelessWidget {
     final theme    = context.watch<ThemeProvider>();
     final trading  = context.watch<TradingModeProvider>();
     return Scaffold(
-      backgroundColor: ext.bg,
+      backgroundColor: Colors.transparent,
       appBar: AppBar(
-        backgroundColor: ext.surface,
+        backgroundColor: ext.surface.withValues(alpha: 0.80),
         surfaceTintColor: Colors.transparent,
         title: Text('Menu',
             style: context.isDark

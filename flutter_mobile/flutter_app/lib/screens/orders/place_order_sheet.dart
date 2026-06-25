@@ -93,7 +93,9 @@ class _PlaceOrderSheetState extends State<PlaceOrderSheet> {
     final ext      = context.appColors;
     final accent   = _isBuy ? AppColors.green : AppColors.red;
     final fmt      = NumberFormat('#,##,##0.00');
-    final keyPad   = MediaQuery.of(context).viewInsets.bottom;
+    final mq       = MediaQuery.of(context);
+    final keyPad   = mq.viewInsets.bottom;
+    final navBar   = mq.viewPadding.bottom;
 
     return Padding(
       padding: EdgeInsets.only(bottom: keyPad),
@@ -139,7 +141,7 @@ class _PlaceOrderSheetState extends State<PlaceOrderSheet> {
           Divider(color: ext.border, height: 1),
 
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 20 + navBar),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               // LTP
               if (widget.ltp > 0) ...[

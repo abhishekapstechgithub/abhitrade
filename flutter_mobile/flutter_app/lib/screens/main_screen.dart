@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
@@ -38,7 +39,14 @@ class _MainScreenState extends State<MainScreen> {
     final isDark = context.isDark;
 
     return Scaffold(
-      body: IndexedStack(index: _index, children: _pages),
+      extendBody: true,
+      backgroundColor: Colors.transparent,
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: isDark ? AppGradients.darkBg : AppGradients.lightBg,
+        ),
+        child: IndexedStack(index: _index, children: _pages),
+      ),
       bottomNavigationBar: _PaperNavBar(
         currentIndex: _index,
         onTap: (i) => setState(() => _index = i),
@@ -71,68 +79,102 @@ class _PaperNavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: ext.surface,
-        border: Border(top: BorderSide(color: ext.border, width: isDark ? 0.5 : 0.8)),
-        boxShadow: isDark ? [] : [
-          BoxShadow(
-            color: const Color(0xFF5A4032).withValues(alpha: 0.08),
-            blurRadius: 8, offset: const Offset(0, -2),
-          ),
-        ],
-      ),
-      child: SafeArea(
-        top: false,
-        child: SizedBox(
-          height: 60,
-          child: Row(
-            children: List.generate(items.length, (i) {
-              final sel    = i == currentIndex;
-              final item   = items[i];
-              final selClr = isDark ? AppColors.blue : const Color(0xFF2C2318);
-              final unSelClr = ext.textSecondary;
-
-              return Expanded(
-                child: GestureDetector(
-                  onTap: () => onTap(i),
-                  behavior: HitTestBehavior.opaque,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 180),
-                    curve: Curves.easeInOut,
-                    margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-                    decoration: sel && !isDark ? BoxDecoration(
-                      color: const Color(0xFFF5D76E).withValues(alpha: 0.45),
-                      borderRadius: const BorderRadius.only(
-                        topLeft: Radius.circular(2),
-                        topRight: Radius.circular(8),
-                        bottomLeft: Radius.circular(6),
-                        bottomRight: Radius.circular(2),
-                      ),
-                    ) : null,
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          sel ? item.activeIcon : item.icon,
-                          size: 21,
-                          color: sel ? selClr : unSelClr,
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          item.label,
-                          style: GoogleFonts.inter(
-                            fontSize: 9.5,
-                            fontWeight: sel ? FontWeight.w700 : FontWeight.w500,
-                            color: sel ? selClr : unSelClr,
-                          ),
-                        ),
-                      ],
-                    ),
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: isDark
+                ? LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      const Color(0xFF050B18).withValues(alpha: 0.78),
+                      const Color(0xFF0D1B2E).withValues(alpha: 0.92),
+                    ],
+                  )
+                : LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      const Color(0xFFFFFFFF).withValues(alpha: 0.72),
+                      const Color(0xFFF5F0E4).withValues(alpha: 0.90),
+                    ],
                   ),
-                ),
-              );
-            }),
+            border: Border(
+              top: BorderSide(
+                color: isDark
+                    ? const Color(0xFFFFFFFF).withValues(alpha: 0.10)
+                    : const Color(0xFFFFFFFF).withValues(alpha: 0.75),
+                width: 0.8,
+              ),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: isDark
+                    ? Colors.black.withValues(alpha: 0.35)
+                    : const Color(0xFF5A4032).withValues(alpha: 0.06),
+                blurRadius: 24,
+                offset: const Offset(0, -6),
+              ),
+            ],
+          ),
+          child: SafeArea(
+            top: false,
+            child: SizedBox(
+              height: 72,
+              child: Row(
+                children: List.generate(items.length, (i) {
+                  final sel      = i == currentIndex;
+                  final item     = items[i];
+                  final selClr   = isDark ? AppColors.blue : const Color(0xFF2C2318);
+                  final unSelClr = ext.textSecondary;
+
+                  return Expanded(
+                    child: GestureDetector(
+                      onTap: () => onTap(i),
+                      behavior: HitTestBehavior.opaque,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        curve: Curves.easeInOut,
+                        margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+                        decoration: sel ? BoxDecoration(
+                          borderRadius: BorderRadius.circular(12),
+                          color: isDark
+                              ? AppColors.blue.withValues(alpha: 0.18)
+                              : const Color(0xFFF5D76E).withValues(alpha: 0.50),
+                          border: Border.all(
+                            color: isDark
+                                ? AppColors.blue.withValues(alpha: 0.25)
+                                : const Color(0xFFF5D76E).withValues(alpha: 0.60),
+                            width: 0.8,
+                          ),
+                        ) : null,
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              sel ? item.activeIcon : item.icon,
+                              size: 26,
+                              color: sel ? selClr : unSelClr,
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              item.label,
+                              style: GoogleFonts.inter(
+                                fontSize: 11,
+                                fontWeight: sel ? FontWeight.w700 : FontWeight.w500,
+                                color: sel ? selClr : unSelClr,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+              ),
+            ),
           ),
         ),
       ),

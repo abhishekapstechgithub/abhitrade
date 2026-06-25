@@ -66,7 +66,7 @@ class AuthProvider extends ChangeNotifier {
           'accessToken': 'mock_token_for_abhishek',
           'user': {
             'id': 'mock_id_abhishek',
-            'email': 'abhishek@abhitrade.online',
+            'email': 'abhishek@abhitrade.com',
             'name': 'Abhishek',
           }
         };

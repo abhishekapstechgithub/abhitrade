@@ -140,9 +140,9 @@ class _WatchlistScreenState extends State<WatchlistScreen> {
     final items = _processItems(wl.active?.items ?? []);
 
     return Scaffold(
-      backgroundColor: ext.bg,
+      backgroundColor: Colors.transparent,
       appBar: AppBar(
-        backgroundColor: ext.surface,
+        backgroundColor: ext.surface.withValues(alpha: 0.80),
         surfaceTintColor: Colors.transparent,
         toolbarHeight: 64,
         titleSpacing: 16,

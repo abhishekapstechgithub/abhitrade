@@ -1,16 +1,9 @@
 import { Router, Request, Response } from 'express';
 import { buildOptionChain, getOptionExpiries, diffChain } from '../lib/optionchain/service.js';
 import { pushTicks, setSpot, getQuote } from '../lib/optionchain/market-data.js';
+import { syncUnivestToRedis, getUnivestSid, toUnivestExp } from '../lib/optionchain/univest-feed.js';
 import { redis } from '../lib/redis-client.js';
 import type { OptionChainResponse } from '../lib/optionchain/types.js';
-
-// ── Univest date conversion ───────────────────────────────────────────────────
-// Univest Exp = Unix timestamp (seconds) of the same calendar date but 10 years
-// earlier at midnight IST (UTC+5:30).  Verified: 1467225000 → 30 JUN 2026.
-function toUnivestExp(yyyymmdd: string): number {
-  const [y, m, d] = yyyymmdd.split('-').map(Number);
-  return Math.floor(Date.UTC(y - 10, m - 1, d) / 1000) - 19800; // -19800 = -5.5h IST offset
-}
 
 const router = Router();
 const EXPIRY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -53,27 +46,33 @@ router.get('/expiries', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/optionchain/univest?expiry=2026-06-30
-// Proxies the Univest OptChainGeeks API for NIFTY (UnderlyingSId=13).
+// GET /api/optionchain/univest?symbol=NIFTY&expiry=2026-06-30
+// Proxies the Univest OptChainGeeks API for any supported index.
+// Supported symbols: NIFTY (13), BANKNIFTY (25), FINNIFTY (27), SENSEX (51), BANKEX (69).
 // Date conversion: Univest Exp = Unix ts of (date - 10 years) at midnight IST.
 router.get('/univest', async (req: Request, res: Response) => {
+  const symbol = (req.query.symbol as string ?? 'NIFTY').trim().toUpperCase();
   const expiry = (req.query.expiry as string ?? '').trim();
   if (!expiry || !EXPIRY_RE.test(expiry)) {
     res.status(400).json({ error: 'expiry is required (YYYY-MM-DD)' }); return;
+  }
+  const sid = getUnivestSid(symbol);
+  if (!sid) {
+    res.status(400).json({ error: `Unsupported symbol: ${symbol}. Supported: NIFTY, BANKNIFTY, FINNIFTY, SENSEX, BANKEX` }); return;
   }
   const exp = toUnivestExp(expiry);
   try {
     const upstream = await fetch('https://livepub.univest.in/DataPub/api/SData/OptChainGeeks', {
       method: 'POST',
       headers: {
-        'Content-Type':  'application/json',
-        'Accept':        'application/json, text/plain, */*',
-        'Origin':        'https://www.univest.in',
-        'Referer':       'https://www.univest.in/',
-        'User-Agent':    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        'Content-Type':    'application/json',
+        'Accept':          'application/json, text/plain, */*',
+        'Origin':          'https://www.univest.in',
+        'Referer':         'https://www.univest.in/',
+        'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
         'Accept-Language': 'en-US,en;q=0.9',
       },
-      body: JSON.stringify({ Data: { UnderlyingSId: 13, Exch: 1, Exp: exp, Count: 1, Seg: '0' } }),
+      body: JSON.stringify({ Data: { UnderlyingSId: sid, Exch: 1, Exp: exp, Count: 1, Seg: '0' } }),
       signal: AbortSignal.timeout(12000),
     });
     if (!upstream.ok) {
@@ -83,8 +82,24 @@ router.get('/univest', async (req: Request, res: Response) => {
     res.set('Cache-Control', 'no-store').json(raw);
   } catch (err) {
     const msg = (err as Error).message;
-    console.error('[optionchain/univest] fetch failed:', msg);
+    console.error(`[optionchain/univest] fetch failed for ${symbol}:`, msg);
     res.status(502).json({ error: 'Failed to reach Univest API', detail: msg });
+  }
+});
+
+// POST /api/optionchain/sync
+// Fetches live option data from Univest and injects LTPs/OI/Greeks into Redis.
+// Body: { symbol: 'NIFTY', expiry: '2026-06-30' }
+router.post('/sync', async (req: Request, res: Response) => {
+  const symbol = (req.body?.symbol as string ?? '').trim().toUpperCase();
+  const expiry = (req.body?.expiry as string ?? '').trim();
+  if (!symbol) { res.status(400).json({ error: 'symbol is required' }); return; }
+  if (!expiry || !EXPIRY_RE.test(expiry)) { res.status(400).json({ error: 'expiry is required (YYYY-MM-DD)' }); return; }
+  try {
+    const result = await syncUnivestToRedis(symbol, expiry);
+    res.json({ ok: true, symbol, expiry, ...result });
+  } catch (err) {
+    res.status(500).json({ error: 'Sync failed', detail: (err as Error).message });
   }
 });
 
@@ -123,8 +138,10 @@ router.get('/stream', (req: Request, res: Response) => {
   const symbol      = (req.query.symbol as string ?? '').trim().toUpperCase();
   const expiry      = (req.query.expiry as string ?? '').trim();
   const strikeCount = Math.min(50, Number(req.query.strikeCount ?? 15));
-  const TICK_MS  = 2000;
-  const MAX_TICKS = 3600;
+  const TICK_MS     = 2000;
+  const MAX_TICKS   = 3600;
+  // Re-sync from Univest every 30 ticks (~60s) to keep LTPs fresh
+  const UNIVEST_SYNC_EVERY = 30;
 
   if (!symbol || !expiry || !EXPIRY_RE.test(expiry)) {
     res.status(400).json({ error: 'symbol and expiry (YYYY-MM-DD) are required' }); return;
@@ -148,6 +165,10 @@ router.get('/stream', (req: Request, res: Response) => {
 
   async function tick() {
     if (closed || ticks >= MAX_TICKS) { res.end(); return; }
+    // Periodically refresh Univest data into Redis (non-blocking, errors ignored)
+    if (ticks % UNIVEST_SYNC_EVERY === 0) {
+      syncUnivestToRedis(symbol, expiry).catch(() => { /* non-fatal */ });
+    }
     try {
       const curr = await buildOptionChain({ symbol, expiry, strikeCount });
       if (!prev) {

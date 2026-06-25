@@ -97,7 +97,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final invested = trading.isPaper ? trading.paperBalance : portfolio.totalInvested;
 
     return Scaffold(
-      backgroundColor: _kBg,
+      backgroundColor: Colors.transparent,
       body: SafeArea(
         child: RefreshIndicator(
           onRefresh: _load,

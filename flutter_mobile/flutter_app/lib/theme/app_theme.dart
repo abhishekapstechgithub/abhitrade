@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -298,4 +299,99 @@ extension ThemeX on BuildContext {
   AppThemeExtension get appColors =>
     Theme.of(this).extension<AppThemeExtension>()!;
   bool get isDark => Theme.of(this).brightness == Brightness.dark;
+}
+
+// ─── App-wide gradient backgrounds ───────────────────────────────────────────
+class AppGradients {
+  AppGradients._();
+
+  static const lightBg = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [
+      Color(0xFFF5F0E4), // warm paper
+      Color(0xFFECDFBF), // warm amber
+      Color(0xFFF0EAD6), // soft cream
+      Color(0xFFEEE5D0), // muted gold
+    ],
+    stops: [0.0, 0.35, 0.65, 1.0],
+  );
+
+  static const darkBg = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [
+      Color(0xFF050B18), // deep navy
+      Color(0xFF081628), // slightly lighter
+      Color(0xFF060D1E), // dark blue
+      Color(0xFF050B18), // back to navy
+    ],
+    stops: [0.0, 0.4, 0.7, 1.0],
+  );
+}
+
+// ─── Glassmorphism card ───────────────────────────────────────────────────────
+class GlassCard extends StatelessWidget {
+  const GlassCard({
+    super.key,
+    required this.child,
+    this.padding,
+    this.margin,
+    this.borderRadius,
+    this.blurSigma = 14.0,
+  });
+
+  final Widget child;
+  final EdgeInsets? padding;
+  final EdgeInsets? margin;
+  final BorderRadius? borderRadius;
+  final double blurSigma;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = context.isDark;
+    final radius = borderRadius ?? BorderRadius.circular(16);
+    return Container(
+      margin: margin,
+      child: ClipRRect(
+        borderRadius: radius,
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
+          child: Container(
+            padding: padding,
+            decoration: BoxDecoration(
+              borderRadius: radius,
+              color: isDark
+                  ? const Color(0xFFFFFFFF).withValues(alpha: 0.06)
+                  : const Color(0xFFFFFFFF).withValues(alpha: 0.55),
+              border: Border.all(
+                color: isDark
+                    ? const Color(0xFFFFFFFF).withValues(alpha: 0.10)
+                    : const Color(0xFFFFFFFF).withValues(alpha: 0.65),
+                width: 1.0,
+              ),
+              gradient: isDark
+                  ? LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        const Color(0xFFFFFFFF).withValues(alpha: 0.07),
+                        const Color(0xFFFFFFFF).withValues(alpha: 0.02),
+                      ],
+                    )
+                  : LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        const Color(0xFFFFFFFF).withValues(alpha: 0.75),
+                        const Color(0xFFFFFFFF).withValues(alpha: 0.35),
+                      ],
+                    ),
+            ),
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
 }

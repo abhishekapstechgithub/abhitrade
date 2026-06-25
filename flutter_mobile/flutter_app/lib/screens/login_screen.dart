@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../providers/app_provider.dart';
 import '../theme/app_theme.dart';
+import 'main_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -35,7 +36,12 @@ class _LoginScreenState extends State<LoginScreen> {
     final err = _isRegister
         ? await auth.register(_nameCtrl.text.trim(), _emailCtrl.text.trim(), _passCtrl.text)
         : await auth.login(_emailCtrl.text.trim(), _passCtrl.text);
-    if (err != null && mounted) setState(() => _errorMsg = err);
+    if (err != null && mounted) {
+      setState(() => _errorMsg = err);
+    } else if (err == null && mounted) {
+      Navigator.pushReplacement(
+          context, MaterialPageRoute(builder: (_) => const MainScreen()));
+    }
   }
 
   @override
@@ -197,7 +203,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Connects to abhitrade.online — secure trading terminal.',
+                          'Connects to abhitrade.com — paper trade terminal.',
                           style: TextStyle(
                               color: ext.textSecondary, fontSize: 12),
                         ),

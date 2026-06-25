@@ -15,6 +15,7 @@ import { getStrikes, getExpiries }     from './security-master';
 import { getQuotesBatch, getSpot, generateMockQuote, writeGreeks, GreeksTick } from './market-data';
 import { calcAtm, getStrikeInterval, buildStrikeRange, getStrikeClass } from './atm';
 import { calcAnalytics }               from './analytics';
+import { syncUnivestToRedis }          from './univest-feed';
 import {
   OptionChainResponse,
   OptionChainRow,
@@ -157,8 +158,21 @@ export async function buildOptionChain(params: {
   await Promise.race([greeksPromise, new Promise(r => setTimeout(r, 300))]);
 
   // 8. Batch quote fetch from Redis (now includes Greeks if Angel One responded in time)
-  const allTokens   = [...ceTokens, ...peTokens];
-  const quoteCache  = await getQuotesBatch(allTokens);
+  const allTokens  = [...ceTokens, ...peTokens];
+  let quoteCache   = await getQuotesBatch(allTokens);
+
+  // 8a. If Redis has no option quotes, try Univest feed immediately.
+  //     This gives the first load real market LTPs instead of mock values.
+  if (quoteCache.size === 0) {
+    const sync = await syncUnivestToRedis(symbol, expiry);
+    if (sync.written > 0) {
+      quoteCache = await getQuotesBatch(allTokens);
+      // If Univest returned a spot price, update spotData
+      if (sync.spot && sync.spot > 0) {
+        spotData.ltp = sync.spot;
+      }
+    }
+  }
 
   // 9. Assemble rows
   const rows: OptionChainRow[] = allStrikes.map(strike => {

@@ -11,26 +11,29 @@ import '../stock_chart/stock_chart_screen.dart';
 
 // ── Public entry point ────────────────────────────────────────────────────────
 class StockDetailSheet extends StatelessWidget {
-  const StockDetailSheet._({required this.item});
+  const StockDetailSheet._({required this.item, required this.outerContext});
   final WatchlistItem item;
+  final BuildContext outerContext;
 
   static void show(BuildContext context, WatchlistItem item) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => StockDetailSheet._(item: item),
+      builder: (_) => StockDetailSheet._(item: item, outerContext: context),
     );
   }
 
   @override
-  Widget build(BuildContext context) => _SheetBody(item: item);
+  Widget build(BuildContext context) =>
+      _SheetBody(item: item, outerContext: outerContext);
 }
 
 // ── Main sheet ────────────────────────────────────────────────────────────────
 class _SheetBody extends StatefulWidget {
   final WatchlistItem item;
-  const _SheetBody({required this.item});
+  final BuildContext outerContext;
+  const _SheetBody({required this.item, required this.outerContext});
   @override
   State<_SheetBody> createState() => _SheetBodyState();
 }
@@ -63,7 +66,8 @@ class _SheetBodyState extends State<_SheetBody>
   Future<void> _loadQuote() async {
     try {
       final res   = await ApiService.instance.getTokenLtps([widget.item.token]);
-      final data  = (res['data'] ?? res['ltp'] ?? {}) as Map<String, dynamic>;
+      // API wraps data under 'prices', with fallback for alternate shapes
+      final data  = (res['prices'] ?? res['data'] ?? res['ltp'] ?? {}) as Map<String, dynamic>;
       final entry = data[widget.item.token] ?? data[widget.item.symbol];
       if (entry != null && mounted) {
         final m = entry as Map<String, dynamic>;
@@ -74,8 +78,8 @@ class _SheetBodyState extends State<_SheetBody>
             high:      _d(m['high']      ?? m['high_price']),
             low:       _d(m['low']       ?? m['low_price']),
             prevClose: _d(m['prev_close'] ?? m['close']),
-            change:    _d(m['change']),
-            changePct: _d(m['change_pct'] ?? m['pct_change']),
+            change:    _d(m['net_change'] ?? m['change'] ?? m['netChange']),
+            changePct: _d(m['change_pct'] ?? m['pct_change'] ?? m['changePct']),
             volume:    (m['volume'] as num?)?.toInt() ?? 0,
           );
           final bids = (m['depth']?['buy']  ?? m['bids'] ?? []) as List;
@@ -112,6 +116,17 @@ class _SheetBodyState extends State<_SheetBody>
 
   String _chartUrl(String period, bool isDark) =>
       _buildChartUrl(_item.symbol, _item.exchange, period, isDark);
+
+  void _openOrder(bool isBuy) {
+    // Close the detail sheet first, then open the order sheet from the outer
+    // context so only one bottom sheet is visible at a time.
+    Navigator.pop(context);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      PlaceOrderSheet.show(widget.outerContext,
+          symbol: _item.symbol, exchange: _item.exchange,
+          ltp: _item.ltp, isBuy: isBuy);
+    });
+  }
 
   void _openOptionChain() {
     OptionChainScreen.show(context,
@@ -279,7 +294,11 @@ class _SheetBodyState extends State<_SheetBody>
             top: false,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-              child: _BuySellRow(item: _item),
+              child: _BuySellRow(
+                item: _item,
+                onBuy: () => _openOrder(true),
+                onSell: () => _openOrder(false),
+              ),
             ),
           ),
         ]),
@@ -319,7 +338,9 @@ class _ActionBtn extends StatelessWidget {
 // ── BUY / SELL row ────────────────────────────────────────────────────────────
 class _BuySellRow extends StatelessWidget {
   final WatchlistItem item;
-  const _BuySellRow({required this.item});
+  final VoidCallback onBuy;
+  final VoidCallback onSell;
+  const _BuySellRow({required this.item, required this.onBuy, required this.onSell});
   @override
   Widget build(BuildContext context) => Row(children: [
     Expanded(child: FilledButton(
@@ -328,9 +349,7 @@ class _BuySellRow extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 16),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
-      onPressed: () => PlaceOrderSheet.show(context,
-          symbol: item.symbol, exchange: item.exchange,
-          ltp: item.ltp, isBuy: true),
+      onPressed: onBuy,
       child: const Text('BUY', style: TextStyle(fontSize: 15,
           fontWeight: FontWeight.w800, letterSpacing: 1.2)),
     )),
@@ -341,9 +360,7 @@ class _BuySellRow extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 16),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
-      onPressed: () => PlaceOrderSheet.show(context,
-          symbol: item.symbol, exchange: item.exchange,
-          ltp: item.ltp, isBuy: false),
+      onPressed: onSell,
       child: const Text('SELL', style: TextStyle(fontSize: 15,
           fontWeight: FontWeight.w800, letterSpacing: 1.2)),
     )),

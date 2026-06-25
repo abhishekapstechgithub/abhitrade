@@ -5,9 +5,12 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../../providers/app_provider.dart';
+import '../../services/strategy_calculator.dart';
 import '../../theme/app_theme.dart';
+import '../option_chain/option_chain_screen.dart';
+import '../orders/place_order_sheet.dart';
 
-// ─── Option Leg Model ────────────────────────────────────────────────────────
+// ─── Option Leg Model ─────────────────────────────────────────────────────────
 
 enum OptionType { call, put }
 enum LegSide { buy, sell }
@@ -21,6 +24,7 @@ class StrategyLeg {
   int lots;
   double premium;
   int lotSize;
+  OptionGreeks? greeks; // set when leg is added from option chain data
 
   StrategyLeg({
     required this.underlying,
@@ -31,11 +35,15 @@ class StrategyLeg {
     this.lots = 1,
     required this.premium,
     required this.lotSize,
+    this.greeks,
   });
 
-  String get typeLabel => optionType == OptionType.call ? 'CE' : 'PE';
-  String get sideLabel => side == LegSide.buy ? 'Buy' : 'Sell';
-  String get legCode  => side == LegSide.buy ? 'B' : 'S';
+  bool get isCall => optionType == OptionType.call;
+  bool get isBuy  => side == LegSide.buy;
+
+  String get typeLabel => isCall ? 'CE' : 'PE';
+  String get sideLabel => isBuy  ? 'Buy' : 'Sell';
+  String get legCode   => isBuy  ? 'B'   : 'S';
 
   String get expiryStr {
     const m = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -48,118 +56,43 @@ class StrategyLeg {
   String moneyness(double spot) {
     final d = (strike - spot).abs() / spot;
     if (d < 0.003) return 'ATM';
-    if (optionType == OptionType.call) return strike < spot ? 'ITM' : 'OTM';
+    if (isCall) return strike < spot ? 'ITM' : 'OTM';
     return strike > spot ? 'ITM' : 'OTM';
   }
 
+  /// Expiry PnL at spot price [s] — per spec Section C
   double expiryPayoff(double s) {
-    final val = optionType == OptionType.call
-        ? max(0.0, s - strike)
-        : max(0.0, strike - s);
-    return (side == LegSide.buy ? 1.0 : -1.0) * (val - premium) * lots * lotSize;
+    final intrinsic = isCall ? max(0.0, s - strike) : max(0.0, strike - s);
+    return (isBuy ? 1.0 : -1.0) * (intrinsic - premium) * lots * lotSize;
   }
+
+  /// Convert to the calculator's LegInput format
+  LegInput toInput() => LegInput(
+    strike:        strike,
+    isCall:        isCall,
+    ltp:           premium,
+    lotSize:       lotSize,
+    quantityLots:  lots,
+    isBuy:         isBuy,
+    greeks:        greeks,
+  );
 }
 
-// ─── Black-Scholes ───────────────────────────────────────────────────────────
-
-double _ncdf(double x) {
-  const a = [0.254829592, -0.284496736, 1.421413741, -1.453152027, 1.061405429];
-  final t = 1.0 / (1.0 + 0.3275911 * x.abs());
-  var p = 0.0;
-  for (var i = 4; i >= 0; i--) p = p * t + a[i];
-  p *= t * exp(-x * x / 2) / sqrt(2 * pi);
-  return x >= 0 ? 1.0 - p : p;
-}
-
-double _npdf(double x) => exp(-x * x / 2) / sqrt(2 * pi);
-
-class _BS {
-  final double price, delta, gamma, theta, vega;
-  const _BS(this.price, this.delta, this.gamma, this.theta, this.vega);
-}
-
-_BS _calcBS(double S, double K, double T, double iv, bool isCall) {
-  const r = 0.07;
-  if (T <= 0) {
-    final v = isCall ? max(0.0, S - K) : max(0.0, K - S);
-    return _BS(v, isCall ? (S >= K ? 1.0 : 0.0) : (S <= K ? -1.0 : 0.0), 0, 0, 0);
-  }
-  final sig = max(0.001, iv);
-  final sqT = sqrt(T);
-  final d1 = (log(S / K) + (r + sig * sig / 2) * T) / (sig * sqT);
-  final d2 = d1 - sig * sqT;
-  final df = exp(-r * T);
-  final price = isCall
-      ? S * _ncdf(d1) - K * df * _ncdf(d2)
-      : K * df * _ncdf(-d2) - S * _ncdf(-d1);
-  final delta = isCall ? _ncdf(d1) : _ncdf(d1) - 1.0;
-  final gamma = _npdf(d1) / (S * sig * sqT);
-  final theta = (-S * _npdf(d1) * sig / (2 * sqT)
-      - r * K * df * (isCall ? _ncdf(d2) : _ncdf(-d2))) / 365;
-  final vega = S * _npdf(d1) * sqT / 100;
-  return _BS(price, delta, gamma, theta, vega);
-}
+// ─── T0 P&L helper (uses Black-Scholes pricing for current-day PnL line) ─────
 
 double _legT0Pnl(StrategyLeg leg, double spot, double iv, double dte) {
-  final bs = _calcBS(spot, leg.strike, max(0.001, dte / 365),
-      iv, leg.optionType == OptionType.call);
-  return (leg.side == LegSide.buy ? 1.0 : -1.0) *
-      (bs.price - leg.premium) * leg.lots * leg.lotSize;
+  final bs = bsCalc(spot, leg.strike, max(0.001, dte / 365), iv, leg.isCall);
+  return (leg.isBuy ? 1.0 : -1.0) * (bs.price - leg.premium) * leg.lots * leg.lotSize;
 }
 
-// ─── Analysis ────────────────────────────────────────────────────────────────
+// ─── Analyse wrapper ─────────────────────────────────────────────────────────
 
-class _Analysis {
-  final double maxProfit, maxLoss, breakeven, rrRatio, pop;
-  final double delta, gamma, theta, vega;
-  const _Analysis({
-    required this.maxProfit, required this.maxLoss,
-    required this.breakeven, required this.rrRatio, required this.pop,
-    required this.delta,     required this.gamma,
-    required this.theta,     required this.vega,
-  });
-}
-
-_Analysis _analyze(List<StrategyLeg> legs, double spot, double iv, double dte) {
-  if (legs.isEmpty) {
-    return const _Analysis(maxProfit: 0, maxLoss: 0, breakeven: 0,
-        rrRatio: 0, pop: 0, delta: 0, gamma: 0, theta: 0, vega: 0);
-  }
-  const steps = 500;
-  final lo = spot * 0.75, hi = spot * 1.25;
-  final step = (hi - lo) / steps;
-  double maxP = -1e9, minP = 1e9, be = spot;
-  int profitCt = 0;
-  double prev = legs.fold(0.0, (s, l) => s + l.expiryPayoff(lo));
-
-  for (int i = 1; i <= steps; i++) {
-    final s = lo + i * step;
-    final pnl = legs.fold(0.0, (sum, l) => sum + l.expiryPayoff(s));
-    if (pnl > maxP) maxP = pnl;
-    if (pnl < minP) minP = pnl;
-    if (pnl > 0) profitCt++;
-    if (prev * pnl < 0) be = s - step * pnl / (pnl - prev);
-    prev = pnl;
-  }
-
-  final T = max(0.001, dte / 365);
-  double d = 0, g = 0, t = 0, v = 0;
-  for (final l in legs) {
-    final bs = _calcBS(spot, l.strike, T, iv, l.optionType == OptionType.call);
-    final sign = l.side == LegSide.buy ? 1.0 : -1.0;
-    d += sign * bs.delta;
-    g += sign * bs.gamma;
-    t += sign * bs.theta;
-    v += sign * bs.vega;
-  }
-
-  return _Analysis(
-    maxProfit: maxP.clamp(-1e8, 1e8),
-    maxLoss:   minP.clamp(-1e8, 1e8),
-    breakeven: be,
-    rrRatio:   minP.abs() > 0.01 ? maxP / minP.abs() : 99.0,
-    pop:       profitCt / steps * 100,
-    delta: d, gamma: g, theta: t, vega: v,
+StrategyResult _analyze(List<StrategyLeg> legs, double spot, double iv, double dte) {
+  return StrategyCalculator.calculate(
+    legs.map((l) => l.toInput()).toList(),
+    spot: spot,
+    iv:   iv,
+    dte:  dte,
   );
 }
 
@@ -167,8 +100,8 @@ _Analysis _analyze(List<StrategyLeg> legs, double spot, double iv, double dte) {
 
 const _underlyings = ['NIFTY 50', 'BANKNIFTY', 'SENSEX', 'FINNIFTY', 'MIDCPNIFTY'];
 const _lotSizes = {
-  'NIFTY 50': 75, 'BANKNIFTY': 15, 'SENSEX': 10,
-  'FINNIFTY': 40, 'MIDCPNIFTY': 75,
+  'NIFTY 50': 65, 'BANKNIFTY': 30, 'SENSEX': 20,
+  'FINNIFTY': 65, 'MIDCPNIFTY': 120,
 };
 
 // ─── Screen ──────────────────────────────────────────────────────────────────
@@ -246,13 +179,12 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
   double _touchVega      = 0;
   double _touchGamma     = 0;
 
-  final _sheetCtrl = DraggableScrollableController();
-
   @override
   void initState() {
     super.initState();
-    _expiries = _nextThursdays();
+    _expiries = _upcomingExpiries(_underlying);
     _expiry   = _expiries.first;
+    _dte      = _expiry.difference(DateTime.now()).inDays.toDouble().clamp(1, 365);
     final ls  = _lotSizes[_underlying] ?? 75;
     _legs = [
       StrategyLeg(underlying: 'NIFTY', expiry: _expiry, strike: 24500,
@@ -269,15 +201,46 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
     _eExpiry     = _expiry;
   }
 
-  List<DateTime> _nextThursdays() {
-    var d = DateTime.now();
-    while (d.weekday != DateTime.thursday) d = d.add(const Duration(days: 1));
-    return List.generate(6, (i) => d.add(Duration(days: i * 7)));
+  // Returns upcoming expiry dates for the given underlying.
+  // NSE weekly: NIFTY 50 (Thursday), SENSEX (Friday).
+  // Monthly-only (SEBI post-Oct 2024): BankNifty (last Wed), FinNifty (last Tue), MidcpNifty (last Mon).
+  List<DateTime> _upcomingExpiries(String underlying) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    // Underlyings with monthly-only expiry and their weekday
+    const monthlyWeekday = {
+      'BANKNIFTY':   DateTime.wednesday,
+      'FINNIFTY':    DateTime.tuesday,
+      'MIDCPNIFTY':  DateTime.monday,
+    };
+
+    if (monthlyWeekday.containsKey(underlying)) {
+      final wd = monthlyWeekday[underlying]!;
+      final result = <DateTime>[];
+      var month = today.month;
+      var year  = today.year;
+      while (result.length < 6) {
+        // Find last occurrence of [wd] in [month/year]
+        final lastDay = DateTime(year, month + 1, 0); // last day of month
+        var d = lastDay;
+        while (d.weekday != wd) d = d.subtract(const Duration(days: 1));
+        if (!d.isBefore(today)) result.add(d);
+        month++;
+        if (month > 12) { month = 1; year++; }
+      }
+      return result;
+    }
+
+    // Weekly expiry: NIFTY 50 = Thursday, SENSEX = Friday, default = Thursday
+    final wd = underlying == 'SENSEX' ? DateTime.friday : DateTime.thursday;
+    var d = today.add(const Duration(days: 1)); // start from tomorrow
+    while (d.weekday != wd) d = d.add(const Duration(days: 1));
+    return List.generate(8, (i) => d.add(Duration(days: i * 7)));
   }
 
   @override
   void dispose() {
-    _sheetCtrl.dispose();
     super.dispose();
   }
 
@@ -293,8 +256,8 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
     _touchT0Pnl     = _legs.fold(0.0, (s, l) => s + _legT0Pnl(l, x, _iv, _dte));
     double d = 0, g = 0, t = 0, v = 0;
     for (final l in _legs) {
-      final bs = _calcBS(x, l.strike, T, _iv, l.optionType == OptionType.call);
-      final sign = l.side == LegSide.buy ? 1.0 : -1.0;
+      final bs = bsCalc(x, l.strike, T, _iv, l.isCall);
+      final sign = l.isBuy ? 1.0 : -1.0;
       d += sign * bs.delta;
       g += sign * bs.gamma;
       t += sign * bs.theta;
@@ -308,12 +271,18 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
 
   void _applyChanges() {
     setState(() {
+      final underlyingChanged = _eUnderlying != _underlying;
       _underlying = _eUnderlying;
       _spot       = _eSpot;
       _iv         = _eIv;
       _dte        = _eDte;
       _expiry     = _eExpiry;
       _spotLocked = _eSpot != _spot;
+      if (underlyingChanged) {
+        _expiries = _upcomingExpiries(_underlying);
+        _expiry   = _expiries.first;
+        _dte      = _expiry.difference(DateTime.now()).inDays.toDouble().clamp(1, 365);
+      }
       final ls    = _lotSizes[_underlying] ?? 75;
       for (final l in _legs) {
         l.lotSize = ls;
@@ -340,21 +309,16 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
     final analysis = _analyze(_legs, _spot, _iv, _dte);
 
     return Scaffold(
-      backgroundColor: ext.bg,
+      backgroundColor: Colors.transparent,
       body: SafeArea(
         child: Column(
           children: [
             _buildHeader(ext, market),
             _buildTabBar(ext),
             Expanded(
-              child: Stack(
-                children: [
-                  SingleChildScrollView(
-                    padding: const EdgeInsets.only(bottom: 280),
-                    child: _tabContent(ext, analysis),
-                  ),
-                  _buildEditPanel(ext),
-                ],
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.only(bottom: 24),
+                child: _tabContent(ext, analysis),
               ),
             ),
           ],
@@ -487,7 +451,7 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
   // ─── Main Tab Bar ───────────────────────────────────────────────────────────
 
   Widget _buildTabBar(AppThemeExtension ext) {
-    const tabs = ['Payoff', 'Legs', 'Greeks', 'Chain', 'Saved', 'Build', 'Backtested', 'Custom'];
+    const tabs = ['Payoff', 'Legs', 'Greeks', 'Saved', 'Backtested', 'Custom'];
     return Container(
       decoration: BoxDecoration(
         color: ext.surface,
@@ -527,21 +491,19 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
 
   // ─── Tab Content ───────────────────────────────────────────────────────────
 
-  Widget _tabContent(AppThemeExtension ext, _Analysis a) {
+  Widget _tabContent(AppThemeExtension ext, StrategyResult a) {
     switch (_tab) {
       case 0: return _payoffTab(ext, a);
       case 1: return _legsTab(ext, a);
       case 2: return _greeksTab(ext, a);
-      case 3: return _chainTab(ext);
-      case 4: return _savedTab(ext);
-      case 5: return _buildTab(ext);
-      case 6: return _comingSoonTab(ext, Icons.history_edu_outlined, 'Backtested');
-      case 7: return _comingSoonTab(ext, Icons.tune_outlined, 'Custom');
+      case 3: return _savedTab(ext);
+      case 4: return _comingSoonTab(ext, Icons.history_edu_outlined, 'Backtested');
+      case 5: return _comingSoonTab(ext, Icons.tune_outlined, 'Custom');
       default: return const SizedBox();
     }
   }
 
-  Widget _payoffTab(AppThemeExtension ext, _Analysis a) {
+  Widget _payoffTab(AppThemeExtension ext, StrategyResult a) {
     return Column(
       children: [
         _StrategyCard(
@@ -572,11 +534,14 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
           onTouch:        _onChartTouch,
           onExpiryChange: (e) => setState(() {
             _expiry = e;
+            _dte    = e.difference(DateTime.now()).inDays.toDouble().clamp(1, 365);
             for (final l in _legs) l.expiry = e;
           }),
         ),
+        Divider(height: 1, color: ext.border),
+        _legsSection(ext),
         Padding(
-          padding: const EdgeInsets.fromLTRB(14, 8, 14, 6),
+          padding: const EdgeInsets.fromLTRB(14, 8, 14, 16),
           child: SizedBox(
             width: double.infinity,
             child: OutlinedButton.icon(
@@ -588,28 +553,21 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
                 padding: const EdgeInsets.symmetric(vertical: 9),
                 textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
               ),
-              onPressed: () => _sheetCtrl.animateTo(
-                0.36,
-                duration: const Duration(milliseconds: 280),
-                curve: Curves.easeOut,
-              ),
+              onPressed: () => _showEditParamsSheet(),
             ),
           ),
         ),
-        Divider(height: 1, color: ext.border),
-        _legsSection(ext),
       ],
     );
   }
 
-  Widget _legsTab(AppThemeExtension ext, _Analysis a) {
-    // Net premium = sum of (sell premium - buy premium) * lots * lotSize
-    double netPremium = 0;
+  Widget _legsTab(AppThemeExtension ext, StrategyResult a) {
+    // Use calculator totals — totalPremiumCashFlow: +ve = debit, -ve = credit
+    final netCashFlow = a.totalPremiumCashFlow;
+    final isDebit = netCashFlow >= 0;
     int longLots = 0, shortLots = 0;
     for (final l in _legs) {
-      final sign = l.side == LegSide.buy ? -1.0 : 1.0;
-      netPremium += sign * l.premium * l.lots * l.lotSize;
-      if (l.side == LegSide.buy) longLots += l.lots;
+      if (l.isBuy) longLots += l.lots;
       else shortLots += l.lots;
     }
     final fmt = NumberFormat('#,##,##0');
@@ -626,9 +584,9 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
               children: [
                 Row(children: [
                   Expanded(child: _SummaryStatCol(
-                    label: 'Net Premium (Cr.)',
-                    value: '${netPremium >= 0 ? '+' : '-'}₹${fmt.format(netPremium.abs())}',
-                    color: netPremium >= 0 ? AppColors.green : AppColors.red,
+                    label: isDebit ? 'Net Debit' : 'Net Credit',
+                    value: '${isDebit ? '-' : '+'}₹${fmt.format(netCashFlow.abs())}',
+                    color: isDebit ? AppColors.red : AppColors.green,
                     ext: ext,
                   )),
                   Container(width: 1, height: 32, color: ext.border),
@@ -679,7 +637,7 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
     );
   }
 
-  Widget _greeksTab(AppThemeExtension ext, _Analysis a) {
+  Widget _greeksTab(AppThemeExtension ext, StrategyResult a) {
     final T   = max(0.001, _dte / 365);
     final sig = max(0.001, _iv);
 
@@ -690,15 +648,15 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
       final d1   = (log(_spot / l.strike) + (0.07 + sig * sig / 2) * T) / (sig * sqT);
       final d2   = d1 - sig * sqT;
       final df   = exp(-0.07 * T);
-      final sign = l.side == LegSide.buy ? 1.0 : -1.0;
+      final sign = l.isBuy ? 1.0 : -1.0;
       final n    = l.lots * l.lotSize;
-      if (l.optionType == OptionType.call) {
-        rho += sign * n * l.strike * T * df * _ncdf(d2) / 100;
+      if (l.isCall) {
+        rho += sign * n * l.strike * T * df * bsNcdf(d2) / 100;
       } else {
-        rho += sign * n * (-l.strike) * T * df * _ncdf(-d2) / 100;
+        rho += sign * n * (-l.strike) * T * df * bsNcdf(-d2) / 100;
       }
-      charm += sign * n * (-_npdf(d1) * (2 * 0.07 * T - d2 * sig * sqT) / (2 * T * sig * sqT));
-      final bs = _calcBS(_spot, l.strike, T, _iv, l.optionType == OptionType.call);
+      charm += sign * n * (-bsNpdf(d1) * (2 * 0.07 * T - d2 * sig * sqT) / (2 * T * sig * sqT));
+      final bs = bsCalc(_spot, l.strike, T, _iv, l.isCall);
       vanna += sign * n * (bs.vega / _spot) * (1 - d1 / (sig * sqT));
     }
 
@@ -751,6 +709,10 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
       ),
     );
   }
+
+  // Opens the full OptionChainScreen and auto-redirects when tab is selected
+  // kept for reference but no longer reachable (Chain tab removed)
+  Widget _chainTabRedirect(AppThemeExtension ext) => const SizedBox.shrink();
 
   Widget _chainTab(AppThemeExtension ext) {
     final atm    = ((_spot / 50).round() * 50).toDouble();
@@ -869,8 +831,8 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
         // Table rows
         ...strikes.map((strike) {
           final isAtm = strike == atm;
-          final callBs = _calcBS(_spot, strike, T, _iv, true);
-          final putBs  = _calcBS(_spot, strike, T, _iv, false);
+          final callBs = bsCalc(_spot, strike, T, _iv, true);
+          final putBs  = bsCalc(_spot, strike, T, _iv, false);
           return Container(
             color: isAtm ? AppColors.greenDimLight.withOpacity(0.4) : Colors.transparent,
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
@@ -1288,45 +1250,49 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
   );
 
   void _addLeg() {
+    final symbol = _underlying.replaceAll(' 50', '').replaceAll(' ', '');
     final ls = _lotSizes[_underlying] ?? 75;
-    setState(() {
-      _legs.add(StrategyLeg(
-        underlying: _underlying.replaceAll(' 50', '').replaceAll(' ', ''),
-        expiry: _expiry,
-        strike: (_spot / 50).round() * 50.0,
-        optionType: OptionType.call,
-        side: LegSide.buy,
-        lots: 1,
-        premium: 0,
-        lotSize: ls,
-      ));
-    });
+    OptionChainScreen.show(context,
+      symbol: symbol,
+      exchange: _underlying == 'SENSEX' ? 'BSE' : 'NSE',
+      lotSize: ls,
+      onLegsSelected: (selections) {
+        setState(() {
+          for (final sel in selections) {
+            _legs.add(StrategyLeg(
+              underlying: symbol,
+              expiry: _expiry,
+              strike: sel.strike,
+              optionType: sel.isCall ? OptionType.call : OptionType.put,
+              side: sel.isBuy ? LegSide.buy : LegSide.sell,
+              lots: sel.qtyLots,
+              premium: sel.ltp,
+              lotSize: ls,
+            ));
+          }
+        });
+      },
+    );
   }
 
-  // ─── Edit Panel ─────────────────────────────────────────────────────────────
+  // ─── Edit Parameters Modal ───────────────────────────────────────────────────
 
-  Widget _buildEditPanel(AppThemeExtension ext) {
-    return DraggableScrollableSheet(
-      controller: _sheetCtrl,
-      initialChildSize: 0.36,
-      minChildSize: 0.14,
-      maxChildSize: 0.88,
-      snap: true,
-      snapSizes: const [0.14, 0.36, 0.88],
-      builder: (ctx, sc) {
-        return Container(
-          decoration: BoxDecoration(
-            color: ext.surface,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withOpacity(0.08),
-                  blurRadius: 16, offset: const Offset(0, -4)),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Fixed handle + header — always visible
+  void _showEditParamsSheet() {
+    final ext = context.appColors;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      useSafeArea: true,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setModal) {
+          return Container(
+            height: MediaQuery.of(ctx).size.height * 0.88,
+            decoration: BoxDecoration(
+              color: ext.surface,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            child: Column(children: [
               const SizedBox(height: 10),
               Center(child: Container(width: 36, height: 4,
                   decoration: BoxDecoration(color: ext.border,
@@ -1334,35 +1300,36 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
               const SizedBox(height: 10),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('Edit Parameters',
-                        style: TextStyle(color: ext.textPrimary, fontSize: 15,
-                            fontWeight: FontWeight.w700)),
-                    GestureDetector(
-                      onTap: () => setState(() {
+                child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                  Text('Edit Parameters',
+                      style: TextStyle(color: ext.textPrimary, fontSize: 15,
+                          fontWeight: FontWeight.w700)),
+                  GestureDetector(
+                    onTap: () {
+                      setState(() {
                         _eUnderlying = _underlying;
                         _eSpot       = _spot;
                         _eIv         = _iv;
                         _eDte        = _dte;
                         _eExpiry     = _expiry;
                         _spotLocked  = false;
-                      }),
-                      child: Text('Reset',
-                          style: TextStyle(color: AppColors.blue, fontSize: 13,
-                              fontWeight: FontWeight.w600)),
-                    ),
-                  ],
-                ),
+                      });
+                      setModal(() {});
+                    },
+                    child: Text('Reset',
+                        style: TextStyle(color: AppColors.blue, fontSize: 13,
+                            fontWeight: FontWeight.w600)),
+                  ),
+                ]),
               ),
               const SizedBox(height: 8),
-              _eParamTabBar(ext),
+              _eParamTabBar(ext, onTabChange: (i) {
+                setState(() => _eParamTab = i);
+                setModal(() {});
+              }),
               Divider(height: 1, color: ext.border),
-              // Scrollable content + Apply button (all inside ListView)
               Expanded(
                 child: ListView(
-                  controller: sc,
                   padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
                   children: [
                     ..._eParamContent(ext),
@@ -1370,32 +1337,34 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: _applyChanges,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.green,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
+                        onPressed: () {
+                          _applyChanges();
+                          Navigator.pop(ctx);
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.green,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                        ),
+                        child: const Text('Apply Changes',
+                            style: TextStyle(color: Colors.white, fontSize: 15,
+                                fontWeight: FontWeight.w700)),
+                      ),
                     ),
-                    child: const Text('Apply Changes',
-                        style: TextStyle(color: Colors.white, fontSize: 15,
-                            fontWeight: FontWeight.w700)),
-                  ),
-                ),
                     const SizedBox(height: 12),
                   ],
                 ),
               ),
-            ],
-          ),
-        );
-      },
+            ]),
+          );
+        },
+      ),
     );
   }
 
-  Widget _eParamTabBar(AppThemeExtension ext) {
+  Widget _eParamTabBar(AppThemeExtension ext, {void Function(int)? onTabChange}) {
     const labels = ['General', 'IV / Vol', 'Time', 'Target'];
-    // Note: displayed labels shortened to fit, full names are General/IV-Volatility/Time/Target
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
@@ -1403,7 +1372,10 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
           final sel = _eParamTab == e.key;
           return Expanded(
             child: GestureDetector(
-              onTap: () => setState(() => _eParamTab = e.key),
+              onTap: () {
+                setState(() => _eParamTab = e.key);
+                onTabChange?.call(e.key);
+              },
               child: Column(
                 children: [
                   Text(e.value,
@@ -1642,8 +1614,8 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
     final T       = max(0.001, _eDte / 365);
     double theta  = 0;
     for (final l in _legs) {
-      final bs   = _calcBS(_eSpot, l.strike, T, _eIv, l.optionType == OptionType.call);
-      final sign = l.side == LegSide.buy ? 1.0 : -1.0;
+      final bs   = bsCalc(_eSpot, l.strike, T, _eIv, l.isCall);
+      final sign = l.isBuy ? 1.0 : -1.0;
       theta += sign * bs.theta * l.lots * l.lotSize;
     }
     final thetaTotal = theta * _eDte;
@@ -2101,7 +2073,7 @@ class _StrategiesScreenState extends State<StrategiesScreen> {
 class _StrategyCard extends StatelessWidget {
   final AppThemeExtension ext;
   final List<StrategyLeg> legs;
-  final _Analysis analysis;
+  final StrategyResult analysis;
   final double spot, iv, dte;
   final bool isSaved;
   final VoidCallback onSaveToggle;
@@ -2129,7 +2101,11 @@ class _StrategyCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final fmt    = NumberFormat('#,##,##0');
+    final fmt = NumberFormat('#,##,##0');
+    final cashFlow = analysis.totalPremiumCashFlow;
+    final isDebit  = cashFlow >= 0;
+    final premiumColor = isDebit ? AppColors.red : AppColors.green;
+    final premiumLabel = isDebit ? 'Net Debit' : 'Net Credit';
 
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
@@ -2137,56 +2113,86 @@ class _StrategyCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Header row
-          Row(
-            children: [
-              const Spacer(),
-              GestureDetector(
-                onTap: onSaveToggle,
-                child: Icon(
-                  isSaved ? Icons.bookmark : Icons.bookmark_border,
-                  size: 24,
-                  color: isSaved ? AppColors.green : ext.textSecondary,
-                ),
+          Row(children: [
+            const Spacer(),
+            GestureDetector(
+              onTap: onSaveToggle,
+              child: Icon(
+                isSaved ? Icons.bookmark : Icons.bookmark_border,
+                size: 24,
+                color: isSaved ? AppColors.green : ext.textSecondary,
               ),
-            ],
+            ),
+          ]),
+          const SizedBox(height: 10),
+          // Premium banner
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: premiumColor.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: premiumColor.withValues(alpha: 0.25)),
+            ),
+            child: Row(children: [
+              Text('$premiumLabel:',
+                  style: TextStyle(color: premiumColor, fontSize: 11,
+                      fontWeight: FontWeight.w600)),
+              const SizedBox(width: 5),
+              Text('${isDebit ? '-' : '+'}₹${fmt.format(cashFlow.abs())}',
+                  style: TextStyle(color: premiumColor, fontSize: 13,
+                      fontWeight: FontWeight.w800)),
+              Container(width: 1, height: 14, color: premiumColor.withValues(alpha: 0.3),
+                  margin: const EdgeInsets.symmetric(horizontal: 8)),
+              Text('₹${analysis.netPremiumPerUnit.abs().toStringAsFixed(2)}/unit',
+                  style: TextStyle(color: ext.textSecondary, fontSize: 11)),
+              const Spacer(),
+              // Breakeven chips
+              ...analysis.breakevens.take(2).map((be) => Container(
+                margin: const EdgeInsets.only(left: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: AppColors.amber.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: AppColors.amber.withValues(alpha: 0.4)),
+                ),
+                child: Text('BE ${fmt.format(be)}',
+                    style: const TextStyle(color: AppColors.amber,
+                        fontSize: 9, fontWeight: FontWeight.w700)),
+              )),
+            ]),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 10),
           // Stats row
           IntrinsicHeight(
-            child: Row(
-              children: [
-                _StatCol(
-                  label: 'Max Profit',
-                  value: analysis.maxProfit >= 1e7
-                      ? 'Unlimited'
-                      : '+₹${fmt.format(analysis.maxProfit.abs())}',
-                  color: AppColors.green),
-                _VDivider(ext: ext),
-                _StatCol(
-                  label: 'Max Loss',
-                  value: analysis.maxLoss <= -1e7
-                      ? 'Unlimited'
-                      : '-₹${fmt.format(analysis.maxLoss.abs())}',
-                  color: AppColors.red),
-                _VDivider(ext: ext),
-                _StatCol(label: 'Breakeven',
-                    value: fmt.format(analysis.breakeven),
-                    color: ext.textPrimary),
-                _VDivider(ext: ext),
-                _StatCol(label: 'RR Ratio',
-                    value: '1:${analysis.rrRatio.toStringAsFixed(1)}',
-                    color: ext.textPrimary),
-                _VDivider(ext: ext),
-                _StatCol(label: 'POP',
-                    value: '${analysis.pop.toStringAsFixed(0)}%',
-                    color: ext.textPrimary),
-              ],
-            ),
+            child: Row(children: [
+              _StatCol(
+                label: 'Max Profit',
+                value: analysis.maxProfit >= 1e7
+                    ? 'Unlimited'
+                    : '+₹${fmt.format(analysis.maxProfit.abs())}',
+                color: AppColors.green),
+              _VDivider(ext: ext),
+              _StatCol(
+                label: 'Max Loss',
+                value: analysis.maxLoss <= -1e7
+                    ? 'Unlimited'
+                    : '-₹${fmt.format(analysis.maxLoss.abs())}',
+                color: AppColors.red),
+              _VDivider(ext: ext),
+              _StatCol(label: 'RR Ratio',
+                  value: '1:${analysis.rrRatio.toStringAsFixed(1)}',
+                  color: ext.textPrimary),
+              _VDivider(ext: ext),
+              _StatCol(label: 'POP',
+                  value: '${analysis.pop.toStringAsFixed(0)}%',
+                  color: ext.textPrimary),
+            ]),
           ),
           const SizedBox(height: 14),
-          // Chart
+          // Chart — pass StrategyResult for payoff data + breakeven lines
           _PayoffChart(
-            legs: legs, spot: spot, iv: iv, dte: dte, ext: ext,
+            legs: legs, result: analysis,
+            spot: spot, iv: iv, dte: dte, ext: ext,
             touchX: touchX, touchPos: touchPos,
             touchExpiryPnl: touchExpiryPnl, touchT0Pnl: touchT0Pnl,
             touchDelta: touchDelta, touchTheta: touchTheta,
@@ -2198,17 +2204,15 @@ class _StrategyCard extends StatelessWidget {
           const SizedBox(height: 12),
           // Bottom stats
           IntrinsicHeight(
-            child: Row(
-              children: [
-                _BStat(label: 'Spot',     value: NumberFormat('#,##,##0.00').format(spot), ext: ext),
-                VerticalDivider(color: ext.border, width: 20, thickness: 1),
-                _BStat(label: 'IV',       value: '${(iv * 100).toStringAsFixed(1)}%', ext: ext),
-                VerticalDivider(color: ext.border, width: 20, thickness: 1),
-                _BStat(label: 'DTE',      value: '${dte.toInt()} days', ext: ext),
-                VerticalDivider(color: ext.border, width: 20, thickness: 1),
-                _BStat(label: 'Lot Size', value: '${legs.isNotEmpty ? legs.first.lotSize : 75}', ext: ext),
-              ],
-            ),
+            child: Row(children: [
+              _BStat(label: 'Spot',     value: NumberFormat('#,##,##0.00').format(spot), ext: ext),
+              VerticalDivider(color: ext.border, width: 20, thickness: 1),
+              _BStat(label: 'IV',       value: '${(iv * 100).toStringAsFixed(1)}%', ext: ext),
+              VerticalDivider(color: ext.border, width: 20, thickness: 1),
+              _BStat(label: 'DTE',      value: '${dte.toInt()} days', ext: ext),
+              VerticalDivider(color: ext.border, width: 20, thickness: 1),
+              _BStat(label: 'Lot Size', value: '${legs.isNotEmpty ? legs.first.lotSize : 75}', ext: ext),
+            ]),
           ),
         ],
       ),
@@ -2220,6 +2224,7 @@ class _StrategyCard extends StatelessWidget {
 
 class _PayoffChart extends StatelessWidget {
   final List<StrategyLeg> legs;
+  final StrategyResult result;    // provides payoffData + breakevens
   final double spot, iv, dte;
   final AppThemeExtension ext;
   final double? touchX;
@@ -2232,7 +2237,8 @@ class _PayoffChart extends StatelessWidget {
   final void Function(DateTime) onExpiryChange;
 
   const _PayoffChart({
-    required this.legs, required this.spot, required this.iv, required this.dte,
+    required this.legs, required this.result,
+    required this.spot, required this.iv, required this.dte,
     required this.ext, required this.touchX, required this.touchPos,
     required this.touchExpiryPnl, required this.touchT0Pnl,
     required this.touchDelta, required this.touchTheta,
@@ -2243,32 +2249,58 @@ class _PayoffChart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (legs.isEmpty) {
+    if (legs.isEmpty || result.payoffData.isEmpty) {
       return SizedBox(
         height: 200,
-        child: Center(child: Text('Add legs to see payoff',
-            style: TextStyle(color: ext.textMuted))),
+        child: Center(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text('Add legs to see payoff',
+                style: TextStyle(color: ext.textMuted, fontSize: 13)),
+            const SizedBox(height: 14),
+            GestureDetector(
+              onTap: () {
+                final state = context.findAncestorStateOfType<_StrategiesScreenState>();
+                state?._addLeg();
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 9),
+                decoration: BoxDecoration(
+                  color: AppColors.green,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  const Icon(Icons.add, color: Colors.white, size: 16),
+                  const SizedBox(width: 6),
+                  const Text('Add Leg',
+                      style: TextStyle(color: Colors.white, fontSize: 13,
+                          fontWeight: FontWeight.w700)),
+                ]),
+              ),
+            ),
+          ]),
+        ),
       );
     }
 
-    const n  = 120;
-    final lo = spot * 0.80, hi = spot * 1.20;
+    // Use the calculator's payoff data (strike-based range, 25/50 step)
+    final pd = result.payoffData;
+    final lo = pd.first.spot;
+    final hi = pd.last.spot;
 
-    final expirySpots = List.generate(n, (i) {
-      final s = lo + i * (hi - lo) / (n - 1);
-      return FlSpot(s, legs.fold(0.0, (sum, l) => sum + l.expiryPayoff(s)));
-    });
+    // Convert PayoffPoint list → FlSpot for expiry line
+    final expirySpots = pd.map((p) => FlSpot(p.spot, p.pnl)).toList();
 
+    // T+0 line: BS pricing over same x range (n=80 for performance)
+    const n = 80;
     final t0Spots = List.generate(n, (i) {
       final s = lo + i * (hi - lo) / (n - 1);
       return FlSpot(s, legs.fold(0.0, (sum, l) => sum + _legT0Pnl(l, s, iv, dte)));
     });
 
     final allY     = [...expirySpots, ...t0Spots].map((s) => s.y).toList();
-    final maxAbs   = allY.map((y) => y.abs()).reduce(max) * 1.3;
+    final maxAbs   = allY.map((y) => y.abs()).fold(0.0, max) * 1.3;
     final chartMax = max(maxAbs, 10000.0);
 
-    // Y-axis labels: "+60K", "+30K", "0", "-30K", "-60K"
     String fmtY(double v) {
       if (v == 0) return '0';
       final abs = v.abs();
@@ -2279,12 +2311,34 @@ class _PayoffChart extends StatelessWidget {
       return v > 0 ? '+$s' : '-$s';
     }
 
+    // Breakeven vertical lines (amber dashed)
+    final beLines = result.breakevens.map((be) => VerticalLine(
+      x: be,
+      color: AppColors.amber.withValues(alpha: 0.65),
+      strokeWidth: 1.2,
+      dashArray: [4, 4],
+      label: VerticalLineLabel(
+        show: true,
+        alignment: Alignment.topRight,
+        labelResolver: (_) => NumberFormat('#,##0').format(be),
+        style: TextStyle(color: AppColors.amber, fontSize: 8,
+            fontWeight: FontWeight.w700),
+      ),
+    )).toList();
+
+    // Spot price vertical line
+    final spotLine = VerticalLine(
+      x: spot,
+      color: ext.textMuted.withValues(alpha: 0.35),
+      strokeWidth: 1,
+      dashArray: [3, 3],
+    );
+
     return Stack(
       children: [
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // P&L label
             Padding(
               padding: const EdgeInsets.only(left: 2, bottom: 2),
               child: Text('P&L',
@@ -2298,6 +2352,9 @@ class _PayoffChart extends StatelessWidget {
                   minX: lo, maxX: hi,
                   minY: -chartMax, maxY: chartMax,
                   clipData: const FlClipData.all(),
+                  extraLinesData: ExtraLinesData(
+                    verticalLines: [spotLine, ...beLines],
+                  ),
                   gridData: FlGridData(
                     show: true,
                     drawVerticalLine: false,
@@ -2305,17 +2362,15 @@ class _PayoffChart extends StatelessWidget {
                     horizontalInterval: chartMax / 3,
                     getDrawingHorizontalLine: (v) => FlLine(
                       color: v == 0
-                          ? ext.textMuted.withOpacity(0.5)
-                          : ext.border.withOpacity(0.5),
+                          ? ext.textMuted.withValues(alpha: 0.5)
+                          : ext.border.withValues(alpha: 0.5),
                       strokeWidth: v == 0 ? 1 : 0.5,
                       dashArray: v == 0 ? null : [4, 4],
                     ),
                   ),
                   titlesData: FlTitlesData(
-                    topTitles: const AxisTitles(
-                        sideTitles: SideTitles(showTitles: false)),
-                    rightTitles: const AxisTitles(
-                        sideTitles: SideTitles(showTitles: false)),
+                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                     leftTitles: AxisTitles(
                       sideTitles: SideTitles(
                         showTitles: true,
@@ -2351,7 +2406,6 @@ class _PayoffChart extends StatelessWidget {
                       }
                       final spots = response?.lineBarSpots;
                       if (spots != null && spots.isNotEmpty) {
-                        // Pick from bar index 0 (expiry P&L)
                         final s = spots.firstWhere(
                           (s) => s.barIndex == 0,
                           orElse: () => spots.first,
@@ -2367,22 +2421,20 @@ class _PayoffChart extends StatelessWidget {
                         spotIndexes.map((_) {
                           if (barData.dashArray != null) return null;
                           return TouchedSpotIndicatorData(
-                            FlLine(color: ext.textMuted.withOpacity(0.4),
+                            FlLine(color: ext.textMuted.withValues(alpha: 0.4),
                                 strokeWidth: 1, dashArray: [3, 3]),
                             FlDotData(
                               getDotPainter: (s, pct, bd, idx) =>
                                   FlDotCirclePainter(
-                                    radius: 4,
-                                    color: AppColors.green,
-                                    strokeWidth: 2,
-                                    strokeColor: Colors.white,
+                                    radius: 4, color: AppColors.green,
+                                    strokeWidth: 2, strokeColor: Colors.white,
                                   ),
                             ),
                           );
                         }).toList(),
                   ),
                   lineBarsData: [
-                    // 0: Expiry P&L — solid green line with fills tied to line
+                    // 0: Expiry P&L — solid green (from calculator payoffData)
                     LineChartBarData(
                       spots: expirySpots,
                       color: AppColors.green,
@@ -2390,25 +2442,23 @@ class _PayoffChart extends StatelessWidget {
                       dotData: const FlDotData(show: false),
                       isCurved: true,
                       curveSmoothness: 0.1,
-                      // Green fill between P&L line and 0 (positive zone only)
                       belowBarData: BarAreaData(
                         show: true,
-                        color: AppColors.green.withOpacity(0.15),
+                        color: AppColors.green.withValues(alpha: 0.15),
                         applyCutOffY: true,
                         cutOffY: 0,
                       ),
-                      // Red fill between 0 and P&L line (negative zone only)
                       aboveBarData: BarAreaData(
                         show: true,
-                        color: AppColors.red.withOpacity(0.12),
+                        color: AppColors.red.withValues(alpha: 0.12),
                         applyCutOffY: true,
                         cutOffY: 0,
                       ),
                     ),
-                    // 1: T+0 P&L — red dashed line
+                    // 1: T+0 P&L — red dashed (BS pricing)
                     LineChartBarData(
                       spots: t0Spots,
-                      color: AppColors.red.withOpacity(0.8),
+                      color: AppColors.red.withValues(alpha: 0.8),
                       barWidth: 1.5,
                       dotData: const FlDotData(show: false),
                       isCurved: true,
@@ -2420,21 +2470,24 @@ class _PayoffChart extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 6),
-            // Legend
-            Row(
-              children: [
-                Container(width: 18, height: 2, color: AppColors.green),
-                const SizedBox(width: 4),
-                Text('Expiry P&L', style: TextStyle(color: ext.textMuted, fontSize: 11)),
+            Row(children: [
+              Container(width: 18, height: 2, color: AppColors.green),
+              const SizedBox(width: 4),
+              Text('Expiry P&L', style: TextStyle(color: ext.textMuted, fontSize: 11)),
+              const SizedBox(width: 12),
+              _DashLegend(color: AppColors.red),
+              const SizedBox(width: 4),
+              Text('T+0 P&L', style: TextStyle(color: ext.textMuted, fontSize: 11)),
+              if (result.breakevens.isNotEmpty) ...[
                 const SizedBox(width: 12),
-                _DashLegend(color: AppColors.red),
+                _DashLegend(color: AppColors.amber),
                 const SizedBox(width: 4),
-                Text('T+0 P&L', style: TextStyle(color: ext.textMuted, fontSize: 11)),
+                Text('Breakeven', style: TextStyle(color: ext.textMuted, fontSize: 11)),
               ],
-            ),
+            ]),
           ],
         ),
-        // Expiry selector (top right)
+        // Expiry selector
         Positioned(
           top: 6, right: 6,
           child: GestureDetector(
@@ -2456,7 +2509,6 @@ class _PayoffChart extends StatelessWidget {
             ),
           ),
         ),
-        // Touch tooltip overlay
         if (touchX != null && touchPos != null)
           _buildTooltip(context),
       ],
@@ -2597,17 +2649,17 @@ class _LegRowState extends State<_LegRow> {
   Widget build(BuildContext context) {
     final ext    = widget.ext;
     final leg    = widget.leg;
-    final isBuy  = leg.side == LegSide.buy;
-    final accent = isBuy ? AppColors.green : AppColors.red;
+    final accent = leg.isBuy ? AppColors.green : AppColors.red;
     final mn     = leg.moneyness(widget.spot);
 
-    // Compute BS LTP and Delta
-    final T   = max(0.001, widget.dte / 365);
-    final bs  = _calcBS(widget.spot, leg.strike, T, widget.iv,
-        leg.optionType == OptionType.call);
-    final ltp   = bs.price;
-    final delta = bs.delta.abs();
-    final ivPct = widget.iv * 100;
+    // Use input greeks when available; else fall back to Black-Scholes
+    final T  = max(0.001, widget.dte / 365);
+    final bs = bsCalc(widget.spot, leg.strike, T, widget.iv, leg.isCall);
+    final greeks = leg.greeks ?? OptionGreeks(
+        delta: bs.delta, theta: bs.theta, gamma: bs.gamma, vega: bs.vega);
+    final ltp    = bs.price;
+    final delta  = greeks.delta.abs();
+    final ivPct  = widget.iv * 100;
 
     return Column(
       children: [
