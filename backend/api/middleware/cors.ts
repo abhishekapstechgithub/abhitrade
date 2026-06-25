@@ -2,6 +2,10 @@ import cors from 'cors';
 
 // Origins allowed to send credentialed requests (cookies)
 const ALLOWED_ORIGINS = [
+  // Production
+  'https://abhitrade.com',
+  'https://www.abhitrade.com',
+  // Local dev
   'http://localhost',        // nginx dev proxy (port 80)
   'http://localhost:3000',   // Next.js direct
   'http://localhost:3001',   // backend direct
