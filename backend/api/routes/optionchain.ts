@@ -1,8 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { buildOptionChain, getOptionExpiries, diffChain } from '../lib/optionchain/service.js';
 import { pushTicks, setSpot, getQuote } from '../lib/optionchain/market-data.js';
-import { syncUnivestToRedis, getUnivestSid, toUnivestExp } from '../lib/optionchain/univest-feed.js';
-import { redis } from '../lib/redis-client.js';
+import { buildUnivestChain, getUnivestSid, toUnivestExp } from '../lib/optionchain/univest-feed.js';
 import type { OptionChainResponse } from '../lib/optionchain/types.js';
 
 const router = Router();
@@ -88,7 +87,7 @@ router.get('/univest', async (req: Request, res: Response) => {
 });
 
 // POST /api/optionchain/sync
-// Fetches live option data from Univest and injects LTPs/OI/Greeks into Redis.
+// Triggers a direct Univest chain build (primary path) for supported indices.
 // Body: { symbol: 'NIFTY', expiry: '2026-06-30' }
 router.post('/sync', async (req: Request, res: Response) => {
   const symbol = (req.body?.symbol as string ?? '').trim().toUpperCase();
@@ -96,8 +95,8 @@ router.post('/sync', async (req: Request, res: Response) => {
   if (!symbol) { res.status(400).json({ error: 'symbol is required' }); return; }
   if (!expiry || !EXPIRY_RE.test(expiry)) { res.status(400).json({ error: 'expiry is required (YYYY-MM-DD)' }); return; }
   try {
-    const result = await syncUnivestToRedis(symbol, expiry);
-    res.json({ ok: true, symbol, expiry, ...result });
+    const chain = await buildOptionChain({ symbol, expiry });
+    res.json({ ok: true, symbol, expiry, source: chain.source, rows: chain.rows.length });
   } catch (err) {
     res.status(500).json({ error: 'Sync failed', detail: (err as Error).message });
   }
@@ -138,10 +137,8 @@ router.get('/stream', (req: Request, res: Response) => {
   const symbol      = (req.query.symbol as string ?? '').trim().toUpperCase();
   const expiry      = (req.query.expiry as string ?? '').trim();
   const strikeCount = Math.min(50, Number(req.query.strikeCount ?? 15));
-  const TICK_MS     = 2000;
-  const MAX_TICKS   = 3600;
-  // Re-sync from Univest every 10 ticks (~20s) to keep LTPs fresh
-  const UNIVEST_SYNC_EVERY = 10;
+  const TICK_MS   = 2000;
+  const MAX_TICKS = 3600;
 
   if (!symbol || !expiry || !EXPIRY_RE.test(expiry)) {
     res.status(400).json({ error: 'symbol and expiry (YYYY-MM-DD) are required' }); return;
@@ -165,10 +162,6 @@ router.get('/stream', (req: Request, res: Response) => {
 
   async function tick() {
     if (closed || ticks >= MAX_TICKS) { res.end(); return; }
-    // Periodically refresh Univest data into Redis (non-blocking, errors ignored)
-    if (ticks % UNIVEST_SYNC_EVERY === 0) {
-      syncUnivestToRedis(symbol, expiry).catch(() => { /* non-fatal */ });
-    }
     try {
       const curr = await buildOptionChain({ symbol, expiry, strikeCount });
       if (!prev) {

@@ -15,7 +15,7 @@ import { getStrikes, getExpiries }     from './security-master';
 import { getQuotesBatch, getSpot, generateMockQuote, writeGreeks, GreeksTick } from './market-data';
 import { calcAtm, getStrikeInterval, buildStrikeRange, getStrikeClass } from './atm';
 import { calcAnalytics }               from './analytics';
-import { syncUnivestToRedis }          from './univest-feed';
+import { buildUnivestChain, isUnivestSymbol } from './univest-feed';
 import {
   OptionChainResponse,
   OptionChainRow,
@@ -117,34 +117,50 @@ export async function buildOptionChain(params: {
   // 1. Try chain cache (5s TTL — avoids re-assembly on rapid API hits)
   const cacheHit = await tryChainCache(symbol, expiry);
   if (cacheHit) {
-    // Apply strike filter to cached response
     return filterRows(cacheHit, strikeCount, fromStrike, toStrike);
   }
 
-  // 2. Security master lookup
+  // 2. Spot price from AngelOne WS Redis (used by both paths below)
+  const spotData = await getSpot(symbol);
+  if (spotData.ltp === 0) {
+    throw new Error(`Spot price unavailable for ${symbol}`);
+  }
+
+  // 3. PRIMARY PATH — Univest direct build for the 5 major indices.
+  //    Bypasses security master and Redis quote cache entirely.
+  //    Uses exactly the request body format the user specified:
+  //    { Data: { UnderlyingSId: <sid>, Exch: 1, Exp: <univestExp>, Count: 1, Seg: '0' } }
+  if (isUnivestSymbol(symbol)) {
+    const univestChain = await buildUnivestChain({
+      symbol, expiry,
+      spot:          spotData.ltp,
+      spotChange:    spotData.change,
+      spotChangePct: spotData.changePct,
+      strikeCount, fromStrike, toStrike,
+    });
+
+    if (univestChain) {
+      await cacheChain(symbol, expiry, univestChain);
+      return univestChain; // already filtered inside buildUnivestChain
+    }
+    // Univest unreachable — fall through to security-master path below
+    console.warn(`[OptionChain] Univest unavailable for ${symbol} ${expiry}, using fallback`);
+  }
+
+  // 4. FALLBACK PATH — security master + Redis quotes (for non-Univest symbols
+  //    or when Univest is temporarily unreachable).
   const strikePairs = await getStrikes(symbol, expiry);
   if (!strikePairs || strikePairs.size === 0) {
     throw new Error(`No instruments found for ${symbol} expiry ${expiry}`);
   }
 
-  // 3. Spot + ATM
-  const spotData = await getSpot(symbol);
-  if (spotData.ltp === 0) {
-    throw new Error(`Spot price unavailable for ${symbol}`);
-  }
   const interval = getStrikeInterval(symbol);
   const atm      = calcAtm(spotData.ltp, interval);
 
-  // 4. Opportunistically refresh Greeks from Angel One (non-blocking, non-fatal)
-  //    Runs in parallel with the quote fetch below; result lands in Redis before
-  //    we do the batch read if Angel One responds fast enough, otherwise it
-  //    populates the cache for the NEXT request (< 3s penalty is acceptable).
+  // Opportunistically refresh Greeks from Angel One (non-blocking, non-fatal)
   const greeksPromise = fetchAndCacheGreeks(symbol, expiry, strikePairs, spotData.ltp);
 
-  // 5. Determine which strikes to fetch (all available — cache the full chain)
   const allStrikes = Array.from(strikePairs.keys()).sort((a, b) => a - b);
-
-  // 6. Collect all tokens
   const ceTokens: number[] = [];
   const peTokens: number[] = [];
   for (const s of allStrikes) {
@@ -153,33 +169,18 @@ export async function buildOptionChain(params: {
     if (p.peToken) peTokens.push(p.peToken);
   }
 
-  // 7. Wait for Greeks (if they arrived quickly) then batch-read quotes from Redis.
-  //    We give Greeks 300ms to land; any slower and they'll appear in the next request.
   await Promise.race([greeksPromise, new Promise(r => setTimeout(r, 300))]);
 
-  // 8. Batch quote fetch from Redis (now includes Greeks if Angel One responded in time)
   const allTokens  = [...ceTokens, ...peTokens];
   const quoteCache = await getQuotesBatch(allTokens);
 
-  // 8a. If Redis has no option quotes, trigger a Univest sync in the background.
-  //     This populates Redis for the NEXT request — never blocks this response.
-  if (quoteCache.size === 0) {
-    syncUnivestToRedis(symbol, expiry).catch(() => { /* non-fatal */ });
-  }
-
-  // 9. Assemble rows
   const rows: OptionChainRow[] = allStrikes.map(strike => {
     const pair = strikePairs.get(strike)!;
     const { isAtm, ceItm, peItm } = getStrikeClass(strike, spotData.ltp, atm, interval);
-
     const ce = resolveQuote(pair.ceToken, pair.ceSymbol, strike, 'CE', spotData.ltp, quoteCache, pair);
     const pe = resolveQuote(pair.peToken, pair.peSymbol, strike, 'PE', spotData.ltp, quoteCache, pair);
-
     return { strike, isAtm, isItm: ceItm, ce, pe };
   });
-
-  // 10. Analytics on full chain
-  const analytics = calcAnalytics(rows);
 
   const fullChain: OptionChainResponse = {
     symbol,
@@ -190,15 +191,12 @@ export async function buildOptionChain(params: {
     atm,
     strikeInterval: interval,
     rows,
-    analytics,
-    timestamp: new Date().toISOString(),
-    source: quoteCache.size > 0 ? 'live' : 'mock',
+    analytics:     calcAnalytics(rows),
+    timestamp:     new Date().toISOString(),
+    source:        quoteCache.size > 0 ? 'live' : 'mock',
   };
 
-  // 9. Cache full chain
   await cacheChain(symbol, expiry, fullChain);
-
-  // 10. Apply strike count filter
   return filterRows(fullChain, strikeCount, fromStrike, toStrike);
 }
 

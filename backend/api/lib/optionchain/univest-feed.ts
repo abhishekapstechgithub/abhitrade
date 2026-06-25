@@ -1,18 +1,26 @@
 /**
- * Univest OptChainGeeks feed — fetches live option LTPs/OI/Greeks for all
- * major Indian indices and injects them into Redis so buildOptionChain()
- * serves real market data instead of mock values.
+ * Univest OptChainGeeks — direct option chain builder for all 5 major Indian indices.
+ *
+ * For NIFTY / BANKNIFTY / FINNIFTY / SENSEX / BANKEX this is the PRIMARY data source.
+ * It bypasses the Redis quote cache and security master entirely: the chain is built
+ * straight from the Univest API response, so it works even without angle_scrip data.
  *
  * Supported symbols and their Univest UnderlyingSId:
- *   NIFTY:     13   (NSE)
- *   BANKNIFTY: 25   (NSE)
- *   FINNIFTY:  27   (NSE)
- *   SENSEX:    51   (BSE)
- *   BANKEX:    69   (BSE)
+ *   NIFTY     → 13  (NSE)
+ *   BANKNIFTY → 25  (NSE)
+ *   FINNIFTY  → 27  (NSE)
+ *   SENSEX    → 51  (BSE)
+ *   BANKEX    → 69  (BSE)
+ *
+ * Request format (POST):
+ *   url:  https://livepub.univest.in/DataPub/api/SData/OptChainGeeks
+ *   body: {"Data":{"UnderlyingSId":<sid>,"Exch":1,"Exp":<univestExp>,"Count":1,"Seg":"0"}}
  */
 
-import { getStrikes } from './security-master.js';
-import { pushTicks, setSpot, type RawTick } from './market-data.js';
+import { calcAtm, getStrikeInterval, getStrikeClass } from './atm.js';
+import { calcAnalytics } from './analytics.js';
+import { STRIKE_INTERVALS } from './types.js';
+import type { OptionChainResponse, OptionChainRow, OptionQuote } from './types.js';
 
 // ── Symbol → Univest identifier ───────────────────────────────────────────────
 
@@ -29,19 +37,25 @@ export function getUnivestSid(symbol: string): number | null {
   return UNDERLYING_SID[symbol.toUpperCase()] ?? null;
 }
 
+/** Returns true if the symbol has a direct Univest option chain feed. */
+export function isUnivestSymbol(symbol: string): boolean {
+  return symbol.toUpperCase() in UNDERLYING_SID;
+}
+
 // ── Date conversion ───────────────────────────────────────────────────────────
 
 /**
  * Convert YYYY-MM-DD → Univest Exp timestamp.
- * Verified: 2026-06-30 → 1467225000, 2026-06-24 → 1466793000 (BSE).
- * Formula: midnight IST of the same date 10 years earlier.
+ * Verified against user-provided examples:
+ *   2026-06-30 → 1467225000  (NIFTY/BANKNIFTY/FINNIFTY — NSE Thursday expiry)
+ *   2026-06-24 → 1466793000  (SENSEX/BANKEX — BSE Tuesday expiry)
  */
 export function toUnivestExp(yyyymmdd: string): number {
   const [y, m, d] = yyyymmdd.split('-').map(Number);
-  return Math.floor(Date.UTC(y - 10, m - 1, d) / 1000) - 19800; // -19800 = -5.5h IST offset
+  return Math.floor(Date.UTC(y - 10, m - 1, d) / 1000) - 19800; // midnight IST, 10 years earlier
 }
 
-// ── Fetch headers ─────────────────────────────────────────────────────────────
+// ── Fetch headers (mimic browser to avoid CDN blocks) ─────────────────────────
 
 const HEADERS = {
   'Content-Type':    'application/json',
@@ -54,38 +68,35 @@ const HEADERS = {
 
 // ── Response parsing ──────────────────────────────────────────────────────────
 
-interface ParsedOptSide {
-  ltp:       number;
-  oi?:       number;
-  changeOi?: number;
-  volume?:   number;
-  iv?:       number;
-  delta?:    number;
-  gamma?:    number;
-  theta?:    number;
-  vega?:     number;
-}
-
-interface ParsedRow {
-  strike: number;
-  ce?:    ParsedOptSide;
-  pe?:    ParsedOptSide;
-}
-
 function n(v: unknown): number {
   if (typeof v === 'number') return isFinite(v) ? v : 0;
   if (typeof v === 'string') { const x = parseFloat(v); return isFinite(x) ? x : 0; }
   return 0;
 }
 
-function parseSide(o: unknown): ParsedOptSide | undefined {
+interface RawOptSide {
+  ltp:       number;
+  oi:        number;
+  changeOi:  number;
+  volume:    number;
+  iv:        number;
+  delta:     number;
+  gamma:     number;
+  theta:     number;
+  vega:      number;
+}
+
+interface RawRow {
+  strike: number;
+  ce?:    RawOptSide;
+  pe?:    RawOptSide;
+}
+
+function parseSide(o: unknown): RawOptSide | undefined {
   if (!o || typeof o !== 'object') return undefined;
   const s = o as Record<string, unknown>;
-
   const ltp = n(s['LTP'] ?? s['ltp'] ?? s['Ltp']);
-  if (ltp <= 0) return undefined; // no live data for this side
-
-  // Volume: prefer explicit "Vol" over "V" (which may be Vega in some formats)
+  if (ltp <= 0) return undefined;
   const hasVol = ('Vol' in s || 'Volume' in s);
   return {
     ltp,
@@ -96,90 +107,44 @@ function parseSide(o: unknown): ParsedOptSide | undefined {
     delta:    n(s['D']   ?? s['Delta']),
     gamma:    n(s['G']   ?? s['Gamma']),
     theta:    n(s['T']   ?? s['Theta']),
-    // Vega: prefer VG or Vega; use V only if no dedicated Vol key
-    vega:     n(s['VG']  ?? s['Vega'] ?? (hasVol ? undefined : s['V'])),
+    vega:     n(s['VG']  ?? s['Vega'] ?? (hasVol ? 0 : n(s['V']))),
   };
 }
 
-function parseResponse(data: unknown): { rows: ParsedRow[]; spot?: number } {
-  let spot: number | undefined;
+function parseData(data: unknown): { rows: RawRow[]; spotFromResponse?: number } {
+  let spotFromResponse: number | undefined;
   let arr: unknown[] = [];
 
   if (Array.isArray(data)) {
     arr = data;
   } else if (data && typeof data === 'object') {
     const d = data as Record<string, unknown>;
-    // Possible spot price fields in Univest response
     const rawSpot = n(d['ULP'] ?? d['Spot'] ?? d['UnderlyingPrice'] ?? d['spot'] ?? d['UPrice']);
-    if (rawSpot > 0) spot = rawSpot;
-    // Possible array wrapper field names
+    if (rawSpot > 0) spotFromResponse = rawSpot;
     const child = d['OC'] ?? d['ocData'] ?? d['data'] ?? d['Data'] ?? d['rows'];
     if (Array.isArray(child)) arr = child;
   }
 
-  const rows: ParsedRow[] = [];
+  const rows: RawRow[] = [];
   for (const raw of arr) {
     if (!raw || typeof raw !== 'object') continue;
     const r = raw as Record<string, unknown>;
     const strike = n(r['SP'] ?? r['Strike'] ?? r['StrikePrice'] ?? r['strike']);
     if (strike <= 0) continue;
-
     const ce = parseSide(r['CE'] ?? r['ce'] ?? r['call']);
     const pe = parseSide(r['PE'] ?? r['pe'] ?? r['put']);
     if (!ce && !pe) continue;
-
     rows.push({ strike, ce, pe });
   }
-  return { rows, spot };
+  return { rows, spotFromResponse };
 }
 
-// ── Sync throttle (avoid hammering Univest) ───────────────────────────────────
+// ── Raw Univest fetch ─────────────────────────────────────────────────────────
 
-// Minimum ms between successive syncs for the same symbol+expiry key
-const SYNC_COOLDOWN_MS = 20_000;
-const lastSync = new Map<string, number>();
-
-function isCoolingDown(key: string): boolean {
-  const last = lastSync.get(key) ?? 0;
-  return Date.now() - last < SYNC_COOLDOWN_MS;
-}
-
-function markSynced(key: string) {
-  lastSync.set(key, Date.now());
-}
-
-// ── Public API ─────────────────────────────────────────────────────────────────
-
-export interface SyncResult {
-  written: number;
-  spot?:   number;
-  source:  'univest' | 'unsupported' | 'no-sm' | 'error' | 'empty' | 'cooldown';
-}
-
-/**
- * Fetch live option data from Univest and push LTPs/OI/Greeks into Redis.
- *
- * Thread-safe: concurrent calls for the same symbol+expiry are throttled
- * (20s cooldown) so Univest is not hammered on every SSE tick.
- *
- * @returns written — number of option ticks pushed into Redis
- */
-export async function syncUnivestToRedis(
-  symbol: string,
-  expiry: string,
-): Promise<SyncResult> {
-  const sym = symbol.toUpperCase();
-  const sid = getUnivestSid(sym);
-  if (!sid) return { written: 0, source: 'unsupported' };
-
-  const key = `${sym}:${expiry}`;
-  if (isCoolingDown(key)) return { written: 0, source: 'cooldown' };
-  markSynced(key); // mark early to prevent concurrent fetches
-
-  const exp = toUnivestExp(expiry);
-
-  // ── Fetch from Univest ─────────────────────────────────────────────────────
-  let raw: { code: number; remarks: string; data: unknown };
+async function fetchUnivestRaw(
+  sid: number,
+  exp: number,
+): Promise<{ code: number; remarks: string; data: unknown } | null> {
   try {
     const res = await fetch('https://livepub.univest.in/DataPub/api/SData/OptChainGeeks', {
       method:  'POST',
@@ -188,78 +153,118 @@ export async function syncUnivestToRedis(
       signal:  AbortSignal.timeout(6000),
     });
     if (!res.ok) {
-      console.warn(`[UnivestFeed] HTTP ${res.status} for ${sym} exp=${expiry}`);
-      return { written: 0, source: 'error' };
+      console.warn(`[UnivestFeed] HTTP ${res.status} sid=${sid} exp=${exp}`);
+      return null;
     }
-    raw = await res.json() as typeof raw;
+    return await res.json() as { code: number; remarks: string; data: unknown };
   } catch (err) {
-    console.warn(`[UnivestFeed] fetch failed for ${sym}:`, (err as Error).message);
-    return { written: 0, source: 'error' };
+    console.warn(`[UnivestFeed] fetch failed sid=${sid}:`, (err as Error).message);
+    return null;
   }
+}
 
-  if (!raw || raw.code !== 1) {
-    console.warn(`[UnivestFeed] unexpected response for ${sym}: code=${raw?.code} remarks=${raw?.remarks}`);
-    return { written: 0, source: 'error' };
-  }
+// ── Build OptionChainResponse directly from Univest ───────────────────────────
 
-  // ── Parse response ─────────────────────────────────────────────────────────
-  const { rows, spot } = parseResponse(raw.data);
-  if (!rows.length) {
+/**
+ * Fetch option chain data from Univest and return a fully assembled
+ * OptionChainResponse — no security master, no Redis quote cache needed.
+ *
+ * @param spot  Live spot price (from AngelOne WS Redis).  Used for ATM
+ *              calculation if Univest does not include the underlying price.
+ * @returns     null if Univest is unreachable or returns no data.
+ */
+export async function buildUnivestChain(params: {
+  symbol:       string;
+  expiry:       string;
+  spot:         number;
+  spotChange:   number;
+  spotChangePct: number;
+  strikeCount?: number;
+  fromStrike?:  number;
+  toStrike?:    number;
+}): Promise<OptionChainResponse | null> {
+  const { symbol, expiry, strikeCount = 15, fromStrike, toStrike } = params;
+  const sym = symbol.toUpperCase();
+  const sid = getUnivestSid(sym);
+  if (!sid) return null;
+
+  const exp = toUnivestExp(expiry);
+  const raw = await fetchUnivestRaw(sid, exp);
+  if (!raw || raw.code !== 1) return null;
+
+  const { rows: rawRows, spotFromResponse } = parseData(raw.data);
+  if (!rawRows.length) {
     console.warn(`[UnivestFeed] empty rows for ${sym} ${expiry}`);
-    return { written: 0, spot, source: 'empty' };
+    return null;
   }
 
-  // Update spot price in Redis if returned
-  if (spot && spot > 0) {
-    await setSpot(sym, { ltp: spot, change: 0, changePct: 0 });
+  const spot         = (spotFromResponse && spotFromResponse > 0) ? spotFromResponse : params.spot;
+  const spotChange   = params.spotChange;
+  const spotChangePct = params.spotChangePct;
+  const interval     = getStrikeInterval(sym);
+  const atm          = calcAtm(spot, interval);
+
+  // Sort rows by strike ascending
+  rawRows.sort((a, b) => a.strike - b.strike);
+
+  // Apply strike filter
+  let filtered = rawRows;
+  if (fromStrike !== undefined && toStrike !== undefined) {
+    filtered = rawRows.filter(r => r.strike >= fromStrike && r.strike <= toStrike);
+  } else {
+    const atmIdx = rawRows.findIndex(r => Math.abs(r.strike - atm) < interval / 2);
+    const center = atmIdx >= 0 ? atmIdx : Math.floor(rawRows.length / 2);
+    const lo     = Math.max(0, center - strikeCount);
+    const hi     = Math.min(rawRows.length - 1, center + strikeCount);
+    filtered     = rawRows.slice(lo, hi + 1);
   }
 
-  // ── Match strikes to AngelOne tokens ───────────────────────────────────────
-  const strikePairs = await getStrikes(sym, expiry);
-  if (!strikePairs || strikePairs.size === 0) {
-    console.warn(`[UnivestFeed] no security master entries for ${sym} ${expiry}`);
-    return { written: 0, spot, source: 'no-sm' };
-  }
+  const rows: OptionChainRow[] = filtered.map(r => {
+    const { isAtm, ceItm, peItm } = getStrikeClass(r.strike, spot, atm, interval);
 
-  const ticks: RawTick[] = [];
-  for (const row of rows) {
-    const pair = strikePairs.get(row.strike);
-    if (!pair) continue;
+    const makeQuote = (side: RawOptSide, optType: 'CE' | 'PE'): OptionQuote => ({
+      token:         0,
+      tradingSymbol: `${sym}${expiry}${r.strike}${optType}`,
+      ltp:           side.ltp,
+      open:          side.ltp,
+      high:          side.ltp,
+      low:           side.ltp,
+      close:         side.ltp * 0.98,   // approximate prev close
+      oi:            side.oi,
+      changeOi:      side.changeOi,
+      volume:        side.volume,
+      bid:           side.ltp > 0.05 ? side.ltp - 0.05 : 0,
+      ask:           side.ltp + 0.05,
+      bidQty:        0,
+      askQty:        0,
+      iv:            side.iv  > 0 ? side.iv    : undefined,
+      delta:         side.delta !== 0 ? side.delta  : undefined,
+      gamma:         side.gamma !== 0 ? side.gamma  : undefined,
+      theta:         side.theta !== 0 ? side.theta  : undefined,
+      vega:          side.vega  !== 0 ? side.vega   : undefined,
+      updatedAt:     Date.now(),
+    });
 
-    if (row.ce && pair.ceToken) {
-      ticks.push({
-        token:    pair.ceToken,
-        ltp:      row.ce.ltp,
-        oi:       row.ce.oi,
-        changeOi: row.ce.changeOi,
-        volume:   row.ce.volume,
-        iv:       row.ce.iv,
-        delta:    row.ce.delta,
-        gamma:    row.ce.gamma,
-        theta:    row.ce.theta,
-        vega:     row.ce.vega,
-      });
-    }
+    return {
+      strike: r.strike,
+      isAtm,
+      isItm:  ceItm,
+      ce:     r.ce ? makeQuote(r.ce, 'CE') : null,
+      pe:     r.pe ? makeQuote(r.pe, 'PE') : null,
+    };
+  });
 
-    if (row.pe && pair.peToken) {
-      ticks.push({
-        token:    pair.peToken,
-        ltp:      row.pe.ltp,
-        oi:       row.pe.oi,
-        changeOi: row.pe.changeOi,
-        volume:   row.pe.volume,
-        iv:       row.pe.iv,
-        delta:    row.pe.delta,
-        gamma:    row.pe.gamma,
-        theta:    row.pe.theta,
-        vega:     row.pe.vega,
-      });
-    }
-  }
-
-  if (!ticks.length) return { written: 0, spot, source: 'no-sm' };
-
-  await pushTicks(ticks);
-  console.info(`[UnivestFeed] ${sym} ${expiry}: wrote ${ticks.length} ticks, spot=${spot}`);
-  return { written: ticks.length, spot, source: 'univest' };
+  return {
+    symbol:         sym,
+    expiry,
+    spot,
+    spotChange,
+    spotChangePct,
+    atm,
+    strikeInterval: interval,
+    rows,
+    analytics:      calcAnalytics(rows),
+    timestamp:      new Date().toISOString(),
+    source:         'live',
+  };
 }
