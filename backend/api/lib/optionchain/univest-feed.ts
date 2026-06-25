@@ -185,7 +185,7 @@ export async function syncUnivestToRedis(
       method:  'POST',
       headers: HEADERS,
       body:    JSON.stringify({ Data: { UnderlyingSId: sid, Exch: 1, Exp: exp, Count: 1, Seg: '0' } }),
-      signal:  AbortSignal.timeout(12000),
+      signal:  AbortSignal.timeout(6000),
     });
     if (!res.ok) {
       console.warn(`[UnivestFeed] HTTP ${res.status} for ${sym} exp=${expiry}`);

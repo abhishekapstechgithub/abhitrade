@@ -140,8 +140,8 @@ router.get('/stream', (req: Request, res: Response) => {
   const strikeCount = Math.min(50, Number(req.query.strikeCount ?? 15));
   const TICK_MS     = 2000;
   const MAX_TICKS   = 3600;
-  // Re-sync from Univest every 30 ticks (~60s) to keep LTPs fresh
-  const UNIVEST_SYNC_EVERY = 30;
+  // Re-sync from Univest every 10 ticks (~20s) to keep LTPs fresh
+  const UNIVEST_SYNC_EVERY = 10;
 
   if (!symbol || !expiry || !EXPIRY_RE.test(expiry)) {
     res.status(400).json({ error: 'symbol and expiry (YYYY-MM-DD) are required' }); return;

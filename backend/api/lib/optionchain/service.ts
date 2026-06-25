@@ -159,19 +159,12 @@ export async function buildOptionChain(params: {
 
   // 8. Batch quote fetch from Redis (now includes Greeks if Angel One responded in time)
   const allTokens  = [...ceTokens, ...peTokens];
-  let quoteCache   = await getQuotesBatch(allTokens);
+  const quoteCache = await getQuotesBatch(allTokens);
 
-  // 8a. If Redis has no option quotes, try Univest feed immediately.
-  //     This gives the first load real market LTPs instead of mock values.
+  // 8a. If Redis has no option quotes, trigger a Univest sync in the background.
+  //     This populates Redis for the NEXT request — never blocks this response.
   if (quoteCache.size === 0) {
-    const sync = await syncUnivestToRedis(symbol, expiry);
-    if (sync.written > 0) {
-      quoteCache = await getQuotesBatch(allTokens);
-      // If Univest returned a spot price, update spotData
-      if (sync.spot && sync.spot > 0) {
-        spotData.ltp = sync.spot;
-      }
-    }
+    syncUnivestToRedis(symbol, expiry).catch(() => { /* non-fatal */ });
   }
 
   // 9. Assemble rows
